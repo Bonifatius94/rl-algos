@@ -1,0 +1,16 @@
+version: "2.3"
+services:
+  rlalgos-cuda:
+    image: rlalgos-cuda
+    build:
+      context: .
+    runtime: nvidia
+    environment:
+      PYTHONUNBUFFERED: 1
+      # info: uncomment this to disable the GPU
+      # CUDA_VISIBLE_DEVICES: "-1"
+      TF_CPP_MIN_LOG_LEVEL: "3"
+    volumes:
+      - ./model:/app/model
+      - ./logs:/app/logs
+      - ./algos:/app/algos
