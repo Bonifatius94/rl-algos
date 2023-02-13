@@ -164,27 +164,27 @@ class PPOVecEnvRolloutBuffer:
     step: int = 0
 
     def __post_init__(self):
-        steps = self.config.n_envs * (self.config.steps_per_update + 1)
-        obs_shape = [steps] + [d for d in self.config.obs_shape]
-        self.prob_dist_cache = np.zeros((steps, self.config.num_actions), dtype=np.float32)
-        self.baseline_cache = np.zeros((steps), dtype=np.float32)
+        steps, n_envs = self.config.steps_per_update + 1, self.config.n_envs
+        obs_shape = [steps, n_envs] + [d for d in self.config.obs_shape]
+        self.prob_dist_cache = np.zeros((steps, n_envs, self.config.num_actions), dtype=np.float32)
+        self.baseline_cache = np.zeros((steps, n_envs), dtype=np.float32)
         self.s0_cache = np.zeros(obs_shape, dtype=np.float32)
-        self.actinon_cache = np.zeros((steps), dtype=np.int64)
-        self.reward_cache = np.zeros((steps), dtype=np.float32)
-        self.done_cache = np.zeros((steps), dtype=np.bool8)
+        self.actinon_cache = np.zeros((steps, n_envs), dtype=np.int64)
+        self.reward_cache = np.zeros((steps, n_envs), dtype=np.float32)
+        self.done_cache = np.zeros((steps, n_envs), dtype=np.bool8)
 
     def append_step(self, preds: BatchedPredictions, exps: BatchedSarsExps):
         prob_dists, baselines = preds
         states_before, actions, rewards, _, dones = exps
-        i, j = self.step * self.config.n_envs, (self.step + 1) * self.config.n_envs
-        self.step += 1
+        t = self.step
 
-        self.prob_dist_cache[i:j] = prob_dists
-        self.baseline_cache[i:j] = baselines
-        self.s0_cache[i:j] = states_before
-        self.actinon_cache[i:j] = actions
-        self.reward_cache[i:j] = rewards
-        self.done_cache[i:j] = dones
+        self.prob_dist_cache[t] = prob_dists
+        self.baseline_cache[t] = baselines
+        self.s0_cache[t] = states_before
+        self.actinon_cache[t] = actions
+        self.reward_cache[t] = rewards
+        self.done_cache[t] = dones
+        self.step += 1
 
         if self.step == self.config.steps_per_update + 1:
             batch = self._sample_batch()
@@ -193,54 +193,43 @@ class PPOVecEnvRolloutBuffer:
 
             # info: sampling requires the baseline of last s1
             #       -> cache 1 more step, assign it to beginning of the next batch
-            self.prob_dist_cache[0:self.config.n_envs] = self.prob_dist_cache[i:j]
-            self.baseline_cache[0:self.config.n_envs] = self.baseline_cache[i:j]
-            self.s0_cache[0:self.config.n_envs] = self.s0_cache[i:j]
-            self.actinon_cache[0:self.config.n_envs] = self.actinon_cache[i:j]
-            self.reward_cache[0:self.config.n_envs] = self.reward_cache[i:j]
-            self.done_cache[0:self.config.n_envs] = self.done_cache[i:j]
+            self.prob_dist_cache[0] = self.prob_dist_cache[t]
+            self.baseline_cache[0] = self.baseline_cache[t]
+            self.s0_cache[0] = self.s0_cache[t]
+            self.actinon_cache[0] = self.actinon_cache[t]
+            self.reward_cache[0] = self.reward_cache[t]
+            self.done_cache[0] = self.done_cache[t]
             self.step = 1
 
     def _sample_batch(self) -> TrainingBatch:
-        batch_steps = self.config.n_envs * self.config.steps_per_update
-        states = self.s0_cache[:batch_steps]
-        actions = self.actinon_cache[:batch_steps]
-        advantages = self._compute_advantages()
-        returns = self.baseline_cache[:batch_steps] + advantages
-        prob_dists_old = self.prob_dist_cache[:batch_steps]
-        baselines_old = self.baseline_cache[:batch_steps]
+        batch_steps = self.config.steps_per_update
+        states = self.s0_cache[:batch_steps].reshape(-1, self.s0_cache.shape[-1])
+        actions = self.actinon_cache[:batch_steps].reshape(-1)
+        advantages = self._compute_advantages()[:batch_steps].reshape(-1)
+        returns = self.baseline_cache[:batch_steps].reshape(-1) + advantages
+        prob_dists_old = self.prob_dist_cache[:batch_steps].reshape(-1, self.prob_dist_cache.shape[-1])
+        baselines_old = self.baseline_cache[:batch_steps].reshape(-1)
         return states, actions, returns, advantages, prob_dists_old, baselines_old
 
     def _compute_advantages(self) -> BatchedAdvantages:
-        batch_size = self.config.steps_per_update * self.config.n_envs
-        baselines = self.baseline_cache[:batch_size]
-        rewards = self.reward_cache[:batch_size]
-        reward_discount = self.config.reward_discount
-        gae_discount = self.config.gae_discount
-
-        advantages = np.zeros_like(rewards)
-        lastgaelam = 0
+        baselines, rewards = self.baseline_cache, self.reward_cache
+        reward_discount, gae_discount = self.config.reward_discount, self.config.gae_discount
+        advantages, last_gae_lam = np.zeros_like(rewards), 0
         for t in reversed(range(self.config.steps_per_update)):
-            # info: slice [i:j] belongs to step t, slice [j:k] belongs to step t+1
-            i, j, k = t * self.config.n_envs, (t + 1) * self.config.n_envs, (t + 2) * self.config.n_envs
-            nextnonterminal = 1.0 - self.done_cache[j:k]
-            nextvalues = self.baseline_cache[j:k]
-            delta = rewards[i:j] + nextvalues * nextnonterminal * reward_discount - baselines[i:j]
-            lastgaelam = delta + nextnonterminal * reward_discount * gae_discount * lastgaelam
-            advantages[i:j] = lastgaelam
+            next_nonterminal = 1.0 - self.done_cache[t+1]
+            delta = rewards[t] + baselines[t+1] * next_nonterminal * reward_discount - baselines[t]
+            last_gae_lam = delta + next_nonterminal * reward_discount * gae_discount * last_gae_lam
+            advantages[t] = last_gae_lam
         return advantages
 
     def _partition_minibatches(self, big_batch: TrainingBatch) -> List[TrainingBatch]:
         num_examples = big_batch[0].shape[0]
         batch_size = self.config.batch_size
         states, actions, returns, advantages, prob_dists_old, baselines_old = big_batch
-
-        mini_batches = []
-        for b in range(num_examples // batch_size):
-            i, j = batch_size * b, batch_size * (b+1)
-            mini_batch = (states[i:j], actions[i:j], returns[i:j],
-                advantages[i:j], prob_dists_old[i:j], baselines_old[i:j])
-            mini_batches.append(mini_batch)
+        ranges = [(i * batch_size, (i+1) * batch_size) for i in range(num_examples // batch_size)]
+        mini_batches = [(states[i:j], actions[i:j], returns[i:j], advantages[i:j],
+                         prob_dists_old[i:j], baselines_old[i:j])
+                        for i, j in ranges]
         return mini_batches
 
 
