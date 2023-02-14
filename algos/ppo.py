@@ -335,7 +335,7 @@ def train_pong():
     # action space: Discrete(6)
     config = PPOTrainingSettings([210, 160, 3], 6)
     make_env = lambda: gym.make("ALE/Pong-v5")
-    vec_env = gym.vector.SyncVectorEnv([make_env for _ in range(config.n_envs)])
+    vec_env = gym.vector.AsyncVectorEnv([make_env for _ in range(config.n_envs)])
 
     tb_logger = TensorboardLogging()
     model = PPOModel(config, tb_logger.log_training_loss, tb_logger.flush_losses)
