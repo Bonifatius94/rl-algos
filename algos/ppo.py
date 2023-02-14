@@ -9,7 +9,7 @@ from tqdm import tqdm
 import tensorflow as tf
 from tensorflow import keras
 from keras import Model
-from keras.layers import Dense, Input
+from keras.layers import Dense, Input, Conv2D, Dropout, Flatten
 from keras.optimizers import Optimizer, Adam
 from keras.metrics import Metric, Mean
 
@@ -49,7 +49,7 @@ class PPOTrainingSettings:
     clip_values: bool = True
     batch_size: int = 64
     n_envs: int = 16
-    steps_per_update: int = 2048
+    steps_per_update: int = 512
     update_epochs: int = 4
 
     def __post_init__(self):
@@ -74,14 +74,28 @@ class PPOModel:
     @staticmethod
     def create_model(obs_shape: List[int], num_actions: int) -> Model:
         model_in = Input(obs_shape)
-        actor_fc_1 = Dense(64, activation='relu')
-        actor_fc_2 = Dense(64, activation='relu')
-        critic_fc_1 = Dense(64, activation='relu')
-        critic_fc_2 = Dense(64, activation='relu')
-        actor_out = Dense(num_actions, activation='softmax')
-        critic_out = Dense(1, activation='linear')
-        actor = actor_out(actor_fc_2(actor_fc_1(model_in)))
-        critic = critic_out(critic_fc_2(critic_fc_1(model_in)))
+        prep_cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), activation="relu")
+        prep_drop_1 = Dropout(rate=0.2)
+        prep_cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
+        prep_drop_2 = Dropout(rate=0.2)
+        prep_cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
+        prep_drop_3 = Dropout(rate=0.2)
+        prep_flatten = Flatten()
+        prep_out = Dense(256, activation="linear")
+
+        prep_model_convs = prep_drop_3(prep_cnn_3(prep_drop_2(
+            prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))
+        prep_model = prep_out(prep_flatten(prep_model_convs))
+
+        actor_fc_1 = Dense(64, activation="relu")
+        actor_fc_2 = Dense(64, activation="relu")
+        critic_fc_1 = Dense(64, activation="relu")
+        critic_fc_2 = Dense(64, activation="relu")
+        actor_out = Dense(num_actions, activation="softmax")
+        critic_out = Dense(1, activation="linear")
+
+        actor = actor_out(actor_fc_2(actor_fc_1(prep_model)))
+        critic = critic_out(critic_fc_2(critic_fc_1(prep_model)))
         return Model(inputs=model_in, outputs=[actor, critic])
 
     def predict(self, states: BatchedObservations) -> BatchedPredictions:
@@ -203,11 +217,12 @@ class PPOVecEnvRolloutBuffer:
 
     def _sample_batch(self) -> TrainingBatch:
         batch_steps = self.config.steps_per_update
-        states = self.s0_cache[:batch_steps].reshape(-1, self.s0_cache.shape[-1])
+        no_t_dim = lambda old_shape: [-1] + [d for d in old_shape[2:]]
+        states = self.s0_cache[:batch_steps].reshape(no_t_dim(self.s0_cache.shape))
         actions = self.actinon_cache[:batch_steps].reshape(-1)
         advantages = self._compute_advantages()[:batch_steps].reshape(-1)
         returns = self.baseline_cache[:batch_steps].reshape(-1) + advantages
-        prob_dists_old = self.prob_dist_cache[:batch_steps].reshape(-1, self.prob_dist_cache.shape[-1])
+        prob_dists_old = self.prob_dist_cache[:batch_steps].reshape(no_t_dim(self.prob_dist_cache.shape))
         baselines_old = self.baseline_cache[:batch_steps].reshape(-1)
         return states, actions, returns, advantages, prob_dists_old, baselines_old
 
@@ -315,9 +330,11 @@ class VecEnvEpisodeStats:
             self.ep_rewards[envs_in_final_state] = 0.0
 
 
-def train_cartpole():
-    config = PPOTrainingSettings([4], 2)
-    make_env = lambda: gym.make("CartPole-v1")
+def train_pong():
+    # obs space: (210, 160, 3), uint8)
+    # action space: Discrete(6)
+    config = PPOTrainingSettings([210, 160, 3], 6)
+    make_env = lambda: gym.make("ALE/Pong-v5")
     vec_env = gym.vector.SyncVectorEnv([make_env for _ in range(config.n_envs)])
 
     tb_logger = TensorboardLogging()
@@ -327,7 +344,7 @@ def train_cartpole():
 
     sample_actions = lambda pred: \
         [int(np.random.choice(config.num_actions, 1, p=prob_dist)) for prob_dist in pred[0]]
-    encode_obs = lambda obs: obs / np.array([[4.8, 10.0, 0.42, 10.0]])
+    encode_obs = lambda obs: obs / 127.5 - 1.0
     session = VecEnvTrainingSession(
         config, vec_env, model.predict, encode_obs, sample_actions,
         exp_buffer.append_step, episode_logger.log_step)
@@ -337,4 +354,4 @@ def train_cartpole():
 
 
 if __name__ == '__main__':
-    train_cartpole()
+    train_pong()
