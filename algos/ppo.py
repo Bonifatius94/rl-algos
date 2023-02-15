@@ -1,4 +1,4 @@
-from typing import Any, Callable, Tuple, List
+from typing import Any, Callable, Tuple, List, Union
 from dataclasses import dataclass, field
 from random import shuffle
 
@@ -37,7 +37,7 @@ TrainingBatch = Tuple[BatchedObservations, BatchedActions, BatchedReturns,
 class PPOTrainingSettings:
     obs_shape: List[int]
     num_actions: int
-    train_steps: int = 200_000
+    train_steps: int = 500_000
     learn_rate: float = 3e-4
     reward_discount: float = 0.99
     gae_discount: float = 0.95
@@ -48,15 +48,20 @@ class PPOTrainingSettings:
     norm_advantages: bool = True
     clip_values: bool = True
     batch_size: int = 64
-    n_envs: int = 16
+    n_envs: int = 32
     steps_per_update: int = 512
     update_epochs: int = 4
+    num_model_snapshots: int = 20
 
     def __post_init__(self):
         if self.n_envs * self.steps_per_update % self.batch_size != 0:
             print((f"WARNING: training examples will be cut because "
                 f"{self.n_envs} environments * {self.steps_per_update} steps per update interval "
                 f"isn't divisible by a mini-batch size of {self.batch_size}!"))
+
+    @property
+    def model_snapshot_interval(self) -> int:
+        return self.train_steps // self.num_model_snapshots
 
 
 class PPOModel:
@@ -161,8 +166,9 @@ class PPOModel:
         return states[ids], actions[ids], returns[ids], \
             advantages[ids], prob_dists_old[ids], baselines_old[ids]
 
-    def save(self):
-        self.model.save_weights("model/ppo_model.h5", overwrite=True)
+    def save(self, step: Union[int, None] = None):
+        model_file = f"model/ppo_model_{step}.h5" if step else f"model/ppo_model_final.h5"
+        self.model.save_weights(model_file, overwrite=True)
 
 
 @dataclass
@@ -257,19 +263,22 @@ class VecEnvTrainingSession:
     sample_actions: Callable[[BatchedPredictions], BatchedActions]
     exps_consumer: Callable[[BatchedPredictions, BatchedSarsExps], None]
     log_timestep: Callable[[int, BatchedRewards, BatchedDones], None]
+    snapshot_model: Callable[[int], None]
 
     def training(self):
         obs = self.encode_obs(self.vec_env.reset())
 
-        for sim_step in tqdm(range(self.config.train_steps)):
+        for step in tqdm(range(self.config.train_steps)):
             predictions = self.model(obs)
             actions = self.sample_actions(predictions)
             next_obs, rewards, dones, _ = self.vec_env.step(actions)
             next_obs = self.encode_obs(next_obs)
             sars_exps = (obs, actions, rewards, next_obs, dones)
             self.exps_consumer(predictions, sars_exps)
-            self.log_timestep(sim_step, rewards, dones)
+            self.log_timestep(step, rewards, dones)
             obs = next_obs
+            if (step + 1) % self.config.model_snapshot_interval == 0:
+                self.snapshot_model(step)
 
 
 @dataclass
@@ -325,7 +334,7 @@ class VecEnvEpisodeStats:
         if num_dones > 0:
             avg_steps = sum(self.ep_steps[envs_in_final_state]) / num_dones
             avg_rewards = sum(self.ep_rewards[envs_in_final_state]) / num_dones
-            self.log_episode(step, avg_steps, avg_rewards)
+            self.log_episode(step, avg_rewards, avg_steps)
             self.ep_steps[envs_in_final_state] = 0
             self.ep_rewards[envs_in_final_state] = 0.0
 
@@ -347,7 +356,7 @@ def train_pong():
     encode_obs = lambda obs: obs / 127.5 - 1.0
     session = VecEnvTrainingSession(
         config, vec_env, model.predict, encode_obs, sample_actions,
-        exp_buffer.append_step, episode_logger.log_step)
+        exp_buffer.append_step, episode_logger.log_step, model.save)
 
     session.training()
     model.save()
