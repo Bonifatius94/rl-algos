@@ -37,7 +37,7 @@ TrainingBatch = Tuple[BatchedObservations, BatchedActions, BatchedReturns,
 class PPOTrainingSettings:
     obs_shape: List[int]
     num_actions: int
-    train_steps: int = 500_000
+    total_steps: int = 10_000_000
     learn_rate: float = 3e-4
     reward_discount: float = 0.99
     gae_discount: float = 0.95
@@ -58,6 +58,10 @@ class PPOTrainingSettings:
             print((f"WARNING: training examples will be cut because "
                 f"{self.n_envs} environments * {self.steps_per_update} steps per update interval "
                 f"isn't divisible by a mini-batch size of {self.batch_size}!"))
+
+    @property
+    def train_steps(self) -> int:
+        return self.total_steps // self.n_envs
 
     @property
     def model_snapshot_interval(self) -> int:
@@ -85,11 +89,14 @@ class PPOModel:
         prep_drop_2 = Dropout(rate=0.2)
         prep_cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
         prep_drop_3 = Dropout(rate=0.2)
+        prep_cnn_4 = Conv2D(8, (3, 3), strides=(2, 2), activation="relu")
+        prep_drop_4 = Dropout(rate=0.2)
         prep_flatten = Flatten()
         prep_out = Dense(256, activation="linear")
 
-        prep_model_convs = prep_drop_3(prep_cnn_3(prep_drop_2(
-            prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))
+        prep_model_convs = \
+            prep_drop_4(prep_cnn_4(prep_drop_3(prep_cnn_3(
+                prep_drop_2(prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))))
         prep_model = prep_out(prep_flatten(prep_model_convs))
 
         actor_fc_1 = Dense(64, activation="relu")
