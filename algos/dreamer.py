@@ -21,8 +21,16 @@ class Trajectory:
     actions: np.ndarray
     rewards: np.ndarray
 
+    def __post_init__(self):
+        if self.actions.shape[0] != self.rewards.shape[0]:
+            raise ValueError(("Invalid trajectory! "
+                              "The amount of actions and rewards needs to be the same!"))
+        if self.actions.shape[0] != self.states.shape[0] + 1:
+            raise ValueError(("Invalid trajectory! "
+                              "The amount of states needs to be one more than actions / rewards!"))
+
     @property
-    def steps(self) -> int:
+    def timesteps(self) -> int:
         return self.actions.shape[0]
 
 
@@ -34,6 +42,10 @@ class DreamerSettings:
     hidden_dims: int
     enc_dims: int
 
+    @property
+    def repr_dims_flat(self) -> int:
+        return self.repr_dims[0] * self.repr_dims[1]
+
 
 class DreamerModel:
     def __init__(self, settings: DreamerSettings):
@@ -41,9 +53,39 @@ class DreamerModel:
         self.optimizer = Adam()
         self.env_model, self.dream_model = DreamerModel.create_models(settings)
 
+    @tf.function
+    def train(self, traj: Trajectory):
+        BETA = 0.1
+
+        # bootstrap first timestep
+        a_in = tf.zeros(self.settings.action_dims)
+        h_in = tf.zeros(self.settings.hidden_dims)
+        z_in = tf.zeros(self.settings.repr_dims)
+        _, __, ___, h0, z0 = self.env_model((traj.states[0], a_in, h_in, z_in))
+
+        loss = 0.0
+        with tf.GradientTape() as tape:
+
+            # unroll trajectory
+            for t in range(traj.timesteps):
+                term = 1.0 if t == traj.timesteps - 1 else 0.0
+                a0, r1, s1 = traj.actions[t], traj.rewards[t], traj.states[t+1]
+                z1_hat, s1_hat, (r1_hat, term_hat), h1, z1 = \
+                    self.env_model((s1, a0, tf.stop_gradient(z0), tf.stop_gradient(h0)))
+
+                reward_loss = MSE(r1, r1_hat)
+                obs_loss = MSE(s1, s1_hat)
+                term_loss = MSE(term, term_hat)
+                repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
+                loss += reward_loss + obs_loss + term_loss + repr_loss
+
+                h0, z0 = h1, z1
+
+        grads = tape.gradient(loss, self.env_model.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+
     @staticmethod
     def create_models(settings: DreamerSettings):
-
         history_model = DreamerModel.create_recurrent_model(settings)
         trans_model = DreamerModel.create_transition_model(settings)
         repr_model = DreamerModel.create_representation_model(settings)
@@ -59,56 +101,22 @@ class DreamerModel:
 
         # TODO: compose models to higher-level model with fluent api
         s1_enc = encoder_model(s1)
-        h1 = history_model(a0, z0, h0)
-        z1 = repr_model(s1_enc, h1)
+        h1 = history_model((a0, z0, h0))
+        z1 = repr_model((s1_enc, h1))
         z1_hat = trans_model(h1)
         # TODO: for performance reasons, leave z1_hat prediction out during simulation
-        out = repr_out_model(z1, h1)
+        out = repr_out_model((z1, h1))
         r1_hat = reward_model(out)
         s1_hat = decoder_model(out)
-
         env_model = Model(inputs=[s1, a0, h0, z0], outputs=[z1_hat, s1_hat, r1_hat, h1, z1])
 
-        h1 = history_model(a0, z0, h0)
+        h1 = history_model((a0, z0, h0))
         z1_hat = trans_model(h1)
-        out = repr_out_model(z1_hat, h1)
+        out = repr_out_model((z1_hat, h1))
         r1_hat = reward_model(out)
         s1_hat = decoder_model(out)
-
         dream_model = Model(inputs=[a0, h0, z0], outputs=[z1_hat, s1_hat, r1_hat, h1])
         return env_model, dream_model
-
-
-    @tf.function
-    def train(self, traj: Trajectory):
-        BETA = 0.1
-
-        # bootstrap first timestep
-        a_in = tf.zeros(self.settings.action_dims)
-        h_in = tf.zeros(self.settings.hidden_dims)
-        z_in = tf.zeros(self.settings.repr_dims)
-        _, __, ___, h0, z0 = self.env_model(traj.states[0], a_in, h_in, z_in)
-
-        loss = 0.0
-        with tf.GradientTape() as tape:
-
-            # unroll trajectory
-            for t in range(traj.steps):
-                term = 1.0 if t == traj.steps - 1 else 0.0
-                a0, r1, s1 = traj.actions[t], traj.rewards[t], traj.states[t+1]
-                z1_hat, s1_hat, (r1_hat, term_hat), h1, z1 = \
-                    self.env_model(s1, a0, tf.stop_gradient(z0), tf.stop_gradient(h0))
-
-                reward_loss = MSE(r1, r1_hat)
-                obs_loss = MSE(s1, s1_hat)
-                term_loss = MSE(term, term_hat)
-                repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
-                loss += reward_loss + obs_loss + term_loss + repr_loss
-
-                h0, z0 = h1, z1
-
-        grads = tape.gradient(loss, self.env_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
 
     @staticmethod
     def create_recurrent_model(settings: DreamerSettings) -> Model:
@@ -116,7 +124,7 @@ class DreamerModel:
 
         h0_in = Input(settings.hidden_dims)
         a0_in = Input(settings.action_dims)
-        z0_in = Input((settings.repr_dims[0], settings.repr_dims[1]))
+        z0_in = Input(settings.repr_dims)
 
         concat_in = Concatenate()
         flatten_repr = Flatten()
@@ -132,8 +140,8 @@ class DreamerModel:
     def create_transition_model(settings: DreamerSettings) -> Model:
         # hidden state t+1 -> representation t+1
         model_in = Input(settings.hidden_dims)
-        dense = Dense(settings.repr_dims[0] * settings.repr_dims[1])
-        reshape = Reshape((settings.repr_dims[0], settings.repr_dims[1]))
+        dense = Dense(settings.repr_dims_flat)
+        reshape = Reshape(settings.repr_dims)
         softmax = Softmax()
         sample = tfp.layers.OneHotCategorical(settings.repr_dims[1])
         stop_grad = Lambda(lambda x: tf.stop_gradient(x))
@@ -151,8 +159,8 @@ class DreamerModel:
         enc_in = Input(settings.enc_dims)
         h_in = Input(settings.hidden_dims)
         concat = Concatenate()
-        dense = Dense(settings.repr_dims[0] * settings.repr_dims[1])
-        reshape = Reshape((settings.repr_dims[0], settings.repr_dims[1]))
+        dense = Dense(settings.repr_dims_flat)
+        reshape = Reshape(settings.repr_dims)
         softmax = Softmax()
         sample = tfp.layers.OneHotCategorical(settings.repr_dims[1])
         stop_grad = Lambda(lambda x: tf.stop_gradient(x))
@@ -167,7 +175,7 @@ class DreamerModel:
     def create_repr_output_model(settings: DreamerSettings) -> Model:
         # fuses representation and hidden state
         # input of decoder and reward prediction
-        repr_in = Input((settings.repr_dims[0], settings.repr_dims[1]))
+        repr_in = Input(settings.repr_dims)
         h_in = Input(settings.hidden_dims)
         concat = Concatenate()
         flatten = Flatten()
@@ -177,57 +185,48 @@ class DreamerModel:
     @staticmethod
     def create_state_encoder_model(settings: DreamerSettings) -> Model:
         model_in = Input(settings.obs_dims)
-        prep_cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_4 = Conv2D(8, (3, 3), padding="same", activation="relu")
-        prep_drop_1 = Dropout(rate=0.2)
-        prep_drop_2 = Dropout(rate=0.2)
-        prep_drop_3 = Dropout(rate=0.2)
-        prep_drop_4 = Dropout(rate=0.2)
-        prep_flatten = Flatten()
-        prep_out = Dense(settings.enc_dims, activation="linear")
+        cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), padding="same", activation="relu")
+        cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
+        cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
+        cnn_4 = Conv2D(8, (3, 3), padding="same", activation="relu")
+        drop_1 = Dropout(rate=0.2)
+        drop_2 = Dropout(rate=0.2)
+        drop_3 = Dropout(rate=0.2)
+        drop_4 = Dropout(rate=0.2)
+        flatten = Flatten()
+        dense_out = Dense(settings.enc_dims, activation="linear")
 
-        prep_model_convs = \
-            prep_drop_4(prep_cnn_4(prep_drop_3(prep_cnn_3(
-                prep_drop_2(prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))))
-        model_out = prep_out(prep_flatten(prep_model_convs))
-
+        prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(model_in))))))))
+        model_out = dense_out(flatten(prep_model_convs))
         return Model(inputs=model_in, outputs=model_out)
 
     @staticmethod
     def create_state_decoder_model(settings: DreamerSettings) -> Model:
         image_channels = settings.obs_dims[-1]
-        input_shape = settings.repr_dims[0] * settings.repr_dims[1] + settings.hidden_dims
+        input_shape = settings.repr_dims_flat + settings.hidden_dims
+        upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
+
         model_in = Input((input_shape))
-
-        input_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
-        dense_in = Dense(input_dims, activation="linear")
+        dense_in = Dense(upscale_source_dims, activation="linear")
         reshape_in = Reshape((settings.obs_dims[0] // 8, settings.obs_dims[1] // 8, -1))
-
-        prep_cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_3 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        prep_cnn_4 = Conv2D(image_channels, (5, 5), padding="same", activation="relu")
-
-        prep_drop_1 = Dropout(rate=0.2)
-        prep_drop_2 = Dropout(rate=0.2)
-        prep_drop_3 = Dropout(rate=0.2)
-        prep_drop_4 = Dropout(rate=0.2)
+        cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
+        cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
+        cnn_3 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
+        cnn_4 = Conv2D(image_channels, (5, 5), padding="same", activation="relu")
+        drop_1 = Dropout(rate=0.2)
+        drop_2 = Dropout(rate=0.2)
+        drop_3 = Dropout(rate=0.2)
+        drop_4 = Dropout(rate=0.2)
 
         prep_in = reshape_in(dense_in(model_in))
-        model_out = \
-            prep_drop_4(prep_cnn_4(prep_drop_3(prep_cnn_3(
-                prep_drop_2(prep_cnn_2(prep_drop_1(prep_cnn_1(prep_in))))))))
-
+        model_out = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in))))))))
         return Model(inputs=model_in, outputs=model_out)
 
     @staticmethod
     def create_reward_model(settings: DreamerSettings) -> Model:
         # concat(representation, hidden state) -> (reward, done)
-        input_shape = settings.repr_dims[0] * settings.repr_dims[1] + settings.hidden_dims
+        input_shape = settings.repr_dims_flat + settings.hidden_dims
         model_in = Input((input_shape))
-
         dense_1 = Dense(64, "relu")
         dense_2 = Dense(64, "relu")
         reward = Dense(1, activation="linear")
