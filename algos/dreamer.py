@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Union
 from dataclasses import dataclass
 
 import gym
@@ -41,14 +41,36 @@ class DreamerSettings:
     repr_dims: List[int]
     hidden_dims: List[int]
     enc_dims: List[int]
+    dropout_rate: float = 0.2
 
     @property
     def repr_dims_flat(self) -> int:
         return self.repr_dims[0] * self.repr_dims[1]
 
     @property
-    def repr_out_dims(self) -> int:
+    def repr_out_dims_flat(self) -> int:
         return self.repr_dims[0] * self.repr_dims[1] + self.hidden_dims[0]
+
+
+class STGradsOneHotCategorical:
+    def __init__(self, dims: Union[int, List[int]]):
+        self.softmax = Softmax()
+        self.sample = tfp.layers.OneHotCategorical(dims)
+        self.stop_grad = Lambda(lambda x: tf.stop_gradient(x))
+
+    def __call__(self, logits):
+        samples = self.sample(logits)
+        probs = self.softmax(logits)
+        return samples + probs - self.stop_grad(probs)
+
+
+class ArgmaxLayer:
+    def __init__(self):
+        self.argmax = Lambda(lambda x: tf.cast(tf.argmax(
+            tf.cast(x, dtype=tf.float32), axis=-1), dtype=tf.float32))
+
+    def __call__(self, onehot_categoricals):
+        return self.argmax(onehot_categoricals)
 
 
 class DreamerModel:
@@ -157,14 +179,8 @@ class DreamerModel:
         model_in = Input(settings.hidden_dims, name="h0")
         dense = Dense(settings.repr_dims_flat)
         reshape = Reshape(settings.repr_dims)
-        softmax = Softmax()
-        sample = tfp.layers.OneHotCategorical(settings.repr_dims[1])
-        stop_grad = Lambda(lambda x: tf.stop_gradient(x))
-
-        logits = reshape(dense(model_in))
-        samples = sample(logits)
-        probs = softmax(logits)
-        model_out = samples + probs - stop_grad(probs) # straight-through gradients
+        st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
+        model_out = st_categorical(reshape(dense(model_in)))
         return Model(inputs=model_in, outputs=model_out, name="transition_model")
 
     @staticmethod
@@ -176,14 +192,8 @@ class DreamerModel:
         concat = Concatenate()
         dense = Dense(settings.repr_dims_flat)
         reshape = Reshape(settings.repr_dims)
-        softmax = Softmax()
-        sample = tfp.layers.OneHotCategorical(settings.repr_dims[1])
-        stop_grad = Lambda(lambda x: tf.stop_gradient(x))
-
-        logits = reshape(dense(concat([enc_in, h_in])))
-        samples = sample(logits)
-        probs = softmax(logits)
-        model_out = samples + probs - stop_grad(probs) # straight-through gradients
+        st_categorical = STGradsOneHotCategorical(settings.repr_dims)
+        model_out = st_categorical(reshape(dense(concat([enc_in, h_in]))))
         return Model(inputs=[enc_in, h_in], outputs=model_out, name="repr_model")
 
     @staticmethod
@@ -205,10 +215,10 @@ class DreamerModel:
         cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_4 = Conv2D(8, (3, 3), padding="same", activation="relu")
-        drop_1 = Dropout(rate=0.0)
-        drop_2 = Dropout(rate=0.0)
-        drop_3 = Dropout(rate=0.0)
-        drop_4 = Dropout(rate=0.0)
+        drop_1 = Dropout(rate=settings.dropout_rate)
+        drop_2 = Dropout(rate=settings.dropout_rate)
+        drop_3 = Dropout(rate=settings.dropout_rate)
+        drop_4 = Dropout(rate=settings.dropout_rate)
         flatten = Flatten()
         dense_out = Dense(settings.enc_dims[0], activation="linear")
 
@@ -220,20 +230,20 @@ class DreamerModel:
     def create_state_decoder_model(settings: DreamerSettings) -> Model:
         # concat(representation t+1, hidden state t+1) -> (obs t+1)
         image_channels = settings.obs_dims[-1]
-        input_shape = settings.repr_out_dims
+        input_shape = settings.repr_out_dims_flat
         upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
 
-        model_in = Input(settings.repr_out_dims, name="repr_out")
+        model_in = Input(settings.repr_out_dims_flat, name="repr_out")
         dense_in = Dense(upscale_source_dims, activation="linear")
         reshape_in = Reshape((settings.obs_dims[0] // 8, settings.obs_dims[1] // 8, -1))
         cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_3 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_4 = Conv2D(image_channels, (5, 5), padding="same", activation="relu")
-        drop_1 = Dropout(rate=0.0)
-        drop_2 = Dropout(rate=0.0)
-        drop_3 = Dropout(rate=0.0)
-        drop_4 = Dropout(rate=0.0)
+        drop_1 = Dropout(rate=settings.dropout_rate)
+        drop_2 = Dropout(rate=settings.dropout_rate)
+        drop_3 = Dropout(rate=settings.dropout_rate)
+        drop_4 = Dropout(rate=settings.dropout_rate)
 
         prep_in = reshape_in(dense_in(model_in))
         model_out = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in))))))))
@@ -242,24 +252,17 @@ class DreamerModel:
     @staticmethod
     def create_reward_model(settings: DreamerSettings) -> Model:
         # concat(representation, hidden state) -> (reward, done)
-        model_in = Input(settings.repr_out_dims, name="repr_out")
+        model_in = Input(settings.repr_out_dims_flat, name="repr_out")
         dense_1 = Dense(64, "relu")
         dense_2 = Dense(64, "relu")
         reward = Dense(1, activation="linear")
         terminal = Dense(2)
-        softmax = Softmax()
-        sample = tfp.layers.OneHotCategorical(2)
-        argmax = Lambda(lambda x: tf.cast(tf.argmax(
-            tf.cast(x, dtype=tf.float32), axis=-1), dtype=tf.float32))
-        stop_grad = Lambda(lambda x: tf.stop_gradient(x))
+        st_categorical = STGradsOneHotCategorical(2)
+        argmax = ArgmaxLayer()
 
         prep = dense_2(dense_1(model_in))
         reward_out = reward(prep)
-        logits = terminal(prep)
-        samples = sample(logits)
-        probs = softmax(logits)
-        samples = samples + probs - stop_grad(probs) # straight-through gradients
-        terminal_out = argmax(samples)
+        terminal_out = argmax(st_categorical(terminal(prep)))
         return Model(inputs=model_in, outputs=[reward_out, terminal_out], name="reward_model")
 
 
