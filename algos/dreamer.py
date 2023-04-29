@@ -243,10 +243,9 @@ class DreamerModel:
         drop_1 = Dropout(rate=settings.dropout_rate)
         drop_2 = Dropout(rate=settings.dropout_rate)
         drop_3 = Dropout(rate=settings.dropout_rate)
-        drop_4 = Dropout(rate=settings.dropout_rate)
 
         prep_in = reshape_in(dense_in(model_in))
-        model_out = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in))))))))
+        model_out = cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in)))))))
         return Model(inputs=model_in, outputs=model_out, name="decoder_model")
 
     @staticmethod
