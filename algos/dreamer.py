@@ -12,7 +12,7 @@ from keras.layers import \
     Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
-from keras.losses import MSE, kullback_leibler_divergence
+from keras.losses import MSE, kullback_leibler_divergence, sparse_categorical_crossentropy
 
 
 @dataclass
@@ -106,7 +106,7 @@ class DreamerModel:
 
                 reward_loss = MSE(r1, r1_hat)
                 obs_loss = MSE(s1, s1_hat)
-                term_loss = MSE(term, term_hat)
+                term_loss = sparse_categorical_crossentropy(term, term_hat)
                 repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
                 loss += reward_loss + obs_loss + term_loss + repr_loss
 
