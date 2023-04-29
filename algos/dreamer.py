@@ -397,7 +397,7 @@ class DreamerDebugDisplay:
 class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVectorEnv
     orig_env: gym.Env
     model: DreamerModel
-    debug: bool = True
+    debug: bool = False
     display_factory: Callable[[], DreamerDebugDisplay] = field(default=lambda: None)
     h0: np.ndarray = field(init=False)
     z0: np.ndarray = field(init=False)

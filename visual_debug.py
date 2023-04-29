@@ -9,7 +9,7 @@ def visual_debugging():
     settings = DreamerSettings([1], [256, 256, 3], [32, 32], [512], [64])
     model = DreamerModel(settings)
     display_factory = lambda: DreamerDebugDisplay(settings.obs_dims[0], settings.obs_dims[1])
-    dream_env = DreamerEnvWrapper(env, model, display_factory=display_factory)
+    dream_env = DreamerEnvWrapper(env, model, debug=True, display_factory=display_factory)
 
     dream_env.reset()
     dream_env.render()
