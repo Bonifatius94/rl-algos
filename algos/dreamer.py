@@ -375,7 +375,7 @@ class DreamerDebugDisplay:
             surface.blit(text, (x_offset, y_offset))
 
         def prepare_frame(image: np.ndarray) -> np.ndarray:
-            return np.clip(image, 0, 255)
+            return np.rot90(np.fliplr(np.clip(image, 0, 255)))
 
         show_text_centered(self.label_orig, self.label_orig_text)
         show_text_centered(self.label_hall, self.label_hall_text)
