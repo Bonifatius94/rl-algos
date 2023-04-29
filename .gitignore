@@ -1,3 +1,5 @@
 logs
 model
 .vscode
+.pytest_cache
+__pycache__

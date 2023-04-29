@@ -39,12 +39,16 @@ class DreamerSettings:
     action_dims: List[int]
     obs_dims: List[int]
     repr_dims: List[int]
-    hidden_dims: int
-    enc_dims: int
+    hidden_dims: List[int]
+    enc_dims: List[int]
 
     @property
     def repr_dims_flat(self) -> int:
         return self.repr_dims[0] * self.repr_dims[1]
+
+    @property
+    def repr_out_dims(self) -> int:
+        return self.repr_dims[0] * self.repr_dims[1] + self.hidden_dims[0]
 
 
 class DreamerModel:
@@ -52,6 +56,8 @@ class DreamerModel:
         self.settings = settings
         self.optimizer = Adam()
         self.env_model, self.dream_model = DreamerModel.create_models(settings)
+        self.env_model.summary()
+        self.dream_model.summary()
 
     @tf.function
     def train(self, traj: Trajectory):
@@ -65,6 +71,9 @@ class DreamerModel:
 
         loss = 0.0
         with tf.GradientTape() as tape:
+
+            # TODO: define model as recurrent cell to unroll
+            #       multiple steps at once with standard api
 
             # unroll trajectory
             for t in range(traj.timesteps):
@@ -86,7 +95,7 @@ class DreamerModel:
 
     @staticmethod
     def create_models(settings: DreamerSettings):
-        history_model = DreamerModel.create_recurrent_model(settings)
+        history_model = DreamerModel.create_history_model(settings)
         trans_model = DreamerModel.create_transition_model(settings)
         repr_model = DreamerModel.create_representation_model(settings)
         repr_out_model = DreamerModel.create_repr_output_model(settings)
@@ -94,12 +103,11 @@ class DreamerModel:
         decoder_model = DreamerModel.create_state_decoder_model(settings)
         reward_model = DreamerModel.create_reward_model(settings)
 
-        s1 = Input(settings.obs_dims)
-        a0 = Input(settings.action_dims)
-        h0 = Input(settings.hidden_dims)
-        z0 = Input(settings.repr_dims)
+        s1 = Input(settings.obs_dims, name="s1")
+        a0 = Input(settings.action_dims, name="a0")
+        h0 = Input(settings.hidden_dims, name="h0")
+        z0 = Input(settings.repr_dims, name="z0")
 
-        # TODO: compose models to higher-level model with fluent api
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
         z1 = repr_model((s1_enc, h1))
@@ -108,38 +116,45 @@ class DreamerModel:
         out = repr_out_model((z1, h1))
         r1_hat = reward_model(out)
         s1_hat = decoder_model(out)
-        env_model = Model(inputs=[s1, a0, h0, z0], outputs=[z1_hat, s1_hat, r1_hat, h1, z1])
+        env_model = Model(
+            inputs=[s1, a0, h0, z0],
+            outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
+            name="env_model")
 
         h1 = history_model((a0, z0, h0))
         z1_hat = trans_model(h1)
         out = repr_out_model((z1_hat, h1))
         r1_hat = reward_model(out)
         s1_hat = decoder_model(out)
-        dream_model = Model(inputs=[a0, h0, z0], outputs=[z1_hat, s1_hat, r1_hat, h1])
+        dream_model = Model(
+            inputs=[a0, h0, z0],
+            outputs=[z1_hat, s1_hat, r1_hat, h1],
+            name="dream_model")
         return env_model, dream_model
 
     @staticmethod
-    def create_recurrent_model(settings: DreamerSettings) -> Model:
+    def create_history_model(settings: DreamerSettings) -> Model:
         # (hidden state t, action t, representation t) -> hidden state t+1
 
-        h0_in = Input(settings.hidden_dims)
-        a0_in = Input(settings.action_dims)
-        z0_in = Input(settings.repr_dims)
+        h0_in = Input(settings.hidden_dims, name="h0")
+        a0_in = Input(settings.action_dims, name="a0")
+        z0_in = Input(settings.repr_dims, name="z0")
 
         concat_in = Concatenate()
         flatten_repr = Flatten()
-        expand_timeseries = Lambda(lambda x: tf.expand_dims(x, axis=0))
-        dense_in = Dense(settings.hidden_dims, activation="linear")
-        rnn = GRU(settings.hidden_dims, return_state=True)
+        expand_timeseries = Lambda(lambda x: tf.expand_dims(x, axis=1))
+        dense_in = Dense(settings.hidden_dims[0], activation="linear")
+        rnn = GRU(settings.hidden_dims[0], return_state=True)
+        # TODO: think about stacking multiple GRU cells
 
         gru_in = dense_in(concat_in([flatten_repr(z0_in), a0_in]))
         _, h1_out = rnn(expand_timeseries(gru_in), initial_state=h0_in)
-        return Model(inputs=[a0_in, z0_in, h0_in], outputs=h1_out)
+        return Model(inputs=[a0_in, z0_in, h0_in], outputs=h1_out, name="history_model")
 
     @staticmethod
     def create_transition_model(settings: DreamerSettings) -> Model:
         # hidden state t+1 -> representation t+1
-        model_in = Input(settings.hidden_dims)
+        model_in = Input(settings.hidden_dims, name="h0")
         dense = Dense(settings.repr_dims_flat)
         reshape = Reshape(settings.repr_dims)
         softmax = Softmax()
@@ -150,14 +165,14 @@ class DreamerModel:
         samples = sample(logits)
         probs = softmax(logits)
         model_out = samples + probs - stop_grad(probs) # straight-through gradients
-        return Model(inputs=model_in, outputs=model_out)
+        return Model(inputs=model_in, outputs=model_out, name="transition_model")
 
     @staticmethod
     def create_representation_model(settings: DreamerSettings) -> Model:
         # fuses encoded state and hidden state
         # stochastic model that outputs a distribution
-        enc_in = Input(settings.enc_dims)
-        h_in = Input(settings.hidden_dims)
+        enc_in = Input(settings.enc_dims, name="enc_obs")
+        h_in = Input(settings.hidden_dims, name="h1")
         concat = Concatenate()
         dense = Dense(settings.repr_dims_flat)
         reshape = Reshape(settings.repr_dims)
@@ -169,84 +184,87 @@ class DreamerModel:
         samples = sample(logits)
         probs = softmax(logits)
         model_out = samples + probs - stop_grad(probs) # straight-through gradients
-        return Model(inputs=[enc_in, h_in], outputs=model_out)
+        return Model(inputs=[enc_in, h_in], outputs=model_out, name="repr_model")
 
     @staticmethod
     def create_repr_output_model(settings: DreamerSettings) -> Model:
         # fuses representation and hidden state
         # input of decoder and reward prediction
-        repr_in = Input(settings.repr_dims)
-        h_in = Input(settings.hidden_dims)
+        repr_in = Input(settings.repr_dims, name="z1")
+        h_in = Input(settings.hidden_dims, name="h1")
         concat = Concatenate()
         flatten = Flatten()
         model_out = concat([flatten(repr_in), h_in])
-        return Model(inputs=[repr_in, h_in], outputs=model_out)
+        return Model(inputs=[repr_in, h_in], outputs=model_out, name="repr_output_model")
 
     @staticmethod
     def create_state_encoder_model(settings: DreamerSettings) -> Model:
-        model_in = Input(settings.obs_dims)
+        # observation t -> encoded state t
+        model_in = Input(settings.obs_dims, name="enc_out")
         cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), padding="same", activation="relu")
         cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_4 = Conv2D(8, (3, 3), padding="same", activation="relu")
-        drop_1 = Dropout(rate=0.2)
-        drop_2 = Dropout(rate=0.2)
-        drop_3 = Dropout(rate=0.2)
-        drop_4 = Dropout(rate=0.2)
+        drop_1 = Dropout(rate=0.0)
+        drop_2 = Dropout(rate=0.0)
+        drop_3 = Dropout(rate=0.0)
+        drop_4 = Dropout(rate=0.0)
         flatten = Flatten()
-        dense_out = Dense(settings.enc_dims, activation="linear")
+        dense_out = Dense(settings.enc_dims[0], activation="linear")
 
         prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(model_in))))))))
         model_out = dense_out(flatten(prep_model_convs))
-        return Model(inputs=model_in, outputs=model_out)
+        return Model(inputs=model_in, outputs=model_out, name="encoder_model")
 
     @staticmethod
     def create_state_decoder_model(settings: DreamerSettings) -> Model:
+        # concat(representation t+1, hidden state t+1) -> (obs t+1)
         image_channels = settings.obs_dims[-1]
-        input_shape = settings.repr_dims_flat + settings.hidden_dims
+        input_shape = settings.repr_out_dims
         upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
 
-        model_in = Input((input_shape))
+        model_in = Input(settings.repr_out_dims, name="repr_out")
         dense_in = Dense(upscale_source_dims, activation="linear")
         reshape_in = Reshape((settings.obs_dims[0] // 8, settings.obs_dims[1] // 8, -1))
         cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_3 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_4 = Conv2D(image_channels, (5, 5), padding="same", activation="relu")
-        drop_1 = Dropout(rate=0.2)
-        drop_2 = Dropout(rate=0.2)
-        drop_3 = Dropout(rate=0.2)
-        drop_4 = Dropout(rate=0.2)
+        drop_1 = Dropout(rate=0.0)
+        drop_2 = Dropout(rate=0.0)
+        drop_3 = Dropout(rate=0.0)
+        drop_4 = Dropout(rate=0.0)
 
         prep_in = reshape_in(dense_in(model_in))
         model_out = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in))))))))
-        return Model(inputs=model_in, outputs=model_out)
+        return Model(inputs=model_in, outputs=model_out, name="decoder_model")
 
     @staticmethod
     def create_reward_model(settings: DreamerSettings) -> Model:
         # concat(representation, hidden state) -> (reward, done)
-        input_shape = settings.repr_dims_flat + settings.hidden_dims
-        model_in = Input((input_shape))
+        model_in = Input(settings.repr_out_dims, name="repr_out")
         dense_1 = Dense(64, "relu")
         dense_2 = Dense(64, "relu")
         reward = Dense(1, activation="linear")
         terminal = Dense(2)
         softmax = Softmax()
         sample = tfp.layers.OneHotCategorical(2)
-        argmax = Lambda(lambda x: tf.cast(tf.argmax(tf.cast(x, dtype=tf.float32), axis=1), dtype=tf.float32))
+        argmax = Lambda(lambda x: tf.cast(tf.argmax(
+            tf.cast(x, dtype=tf.float32), axis=-1), dtype=tf.float32))
         stop_grad = Lambda(lambda x: tf.stop_gradient(x))
 
         prep = dense_2(dense_1(model_in))
         reward_out = reward(prep)
         logits = terminal(prep)
-        samples = argmax(sample(logits))
+        samples = sample(logits)
         probs = softmax(logits)
-        terminal_out = samples + probs - stop_grad(probs) # straight-through gradients
-        return Model(inputs=model_in, outputs=[reward_out, terminal_out])
+        samples = samples + probs - stop_grad(probs) # straight-through gradients
+        terminal_out = argmax(samples)
+        return Model(inputs=model_in, outputs=[reward_out, terminal_out], name="reward_model")
 
 
 @dataclass
-class DreamerEnvWrapper(gym.Env):
+class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVectorEnv
     orig_env: gym.Env
 
     @property
@@ -271,5 +289,4 @@ class DreamerEnvWrapper(gym.Env):
 
 
 if __name__ == "__main__":
-    settings = DreamerSettings([10], [32, 32, 3], [32, 32], 512, 64)
-    model = DreamerModel(settings)
+    pass
