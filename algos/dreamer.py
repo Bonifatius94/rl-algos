@@ -26,6 +26,7 @@ from keras.losses import MSE, kullback_leibler_divergence, sparse_categorical_cr
 @dataclass
 class Trajectory:
     states: np.ndarray
+    zs: np.ndarray
     actions: np.ndarray
     rewards: np.ndarray
 
@@ -33,7 +34,8 @@ class Trajectory:
         if self.actions.shape[0] != self.rewards.shape[0]:
             raise ValueError(
                 "Invalid trajectory! The amount of actions and rewards needs to be the same!")
-        if self.actions.shape[0] != self.states.shape[0] + 1:
+        if self.actions.shape[0] + 1 != self.states.shape[0] \
+                or self.states.shape[0] != self.zs.shape[0]:
             raise ValueError(
                 f"Invalid trajectory! Expected {self.rewards.shape[0] + 1} states!")
 
@@ -105,31 +107,31 @@ class DreamerModel:
         return h0, z0
 
     @tf.function
-    def train(self, traj: Trajectory):
+    def train(self, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray):
         BETA = 0.1
-
-        h0, z0 = self.bootstrap(tf.expand_dims(traj.states[0], axis=0))
+        timesteps = actions.shape[0]
         loss = 0.0
-
         with tf.GradientTape() as tape:
+
+            h0, z0 = self.bootstrap(tf.expand_dims(states[0], axis=0))
 
             # TODO: define model as recurrent cell to unroll
             #       multiple steps at once with standard api
 
             # unroll trajectory
-            for t in range(traj.timesteps):
-                a0, r1, s1 = traj.actions[t], traj.rewards[t], traj.states[t+1]
+            for t in range(timesteps):
+                a0, r1, s1 = actions[t], rewards[t], states[t+1]
                 a0 = tf.expand_dims(a0, axis=0)
                 r1 = tf.expand_dims(r1, axis=0)
                 s1 = tf.expand_dims(s1, axis=0)
-                term = tf.constant(1.0 if t == traj.timesteps - 1 else 0.0, shape=(1, 1))
+                term = tf.constant(1.0 if t == timesteps - 1 else 0.0, shape=(1, 1))
 
                 z1_hat, s1_hat, (r1_hat, term_hat), h1, z1 = \
-                    self.env_model((s1, a0, tf.stop_gradient(z0), tf.stop_gradient(h0)))
+                    self.env_model((s1, a0, tf.stop_gradient(h0), tf.stop_gradient(z0)))
 
                 reward_loss = MSE(r1, r1_hat)
                 obs_loss = MSE(s1, s1_hat)
-                term_loss = sparse_categorical_crossentropy(term, term_hat)
+                term_loss = MSE(term, term_hat)
                 repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
                 loss += reward_loss + obs_loss + term_loss + repr_loss
 
@@ -268,7 +270,6 @@ class DreamerModel:
     def _create_state_decoder_model(settings: DreamerSettings) -> Model:
         # concat(representation t+1, hidden state t+1) -> (obs t+1)
         image_channels = settings.obs_dims[-1]
-        input_shape = settings.repr_out_dims_flat
         upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
 
         model_in = Input(settings.repr_out_dims_flat, name="repr_out")
@@ -277,13 +278,15 @@ class DreamerModel:
         cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_3 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
-        cnn_4 = Conv2D(image_channels, (5, 5), padding="same", activation="relu")
+        cnn_4 = Conv2D(16, (5, 5), padding="same", activation="relu")
+        cnn_5 = Conv2D(image_channels, (1, 1), padding="same", activation="sigmoid")
         drop_1 = Dropout(rate=settings.dropout_rate)
         drop_2 = Dropout(rate=settings.dropout_rate)
         drop_3 = Dropout(rate=settings.dropout_rate)
+        scale_255 = Lambda(lambda x: x * 255)
 
         prep_in = reshape_in(dense_in(model_in))
-        model_out = cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in)))))))
+        model_out = scale_255(cnn_5(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(prep_in)))))))))
         return Model(inputs=model_in, outputs=model_out, name="decoder_model")
 
     @staticmethod
@@ -308,8 +311,9 @@ BLACK = (0, 0, 0)
 
 
 class DreamerDebugDisplay:
-    def __init__(self, img_width: int, img_height: int):
-        self.img_width, self.img_height = img_width, img_height
+    def __init__(self, img_width: int, img_height: int, scaling: float=1):
+        self.scaling = scaling
+        self.img_width, self.img_height = img_width * scaling, img_height * scaling
         pygame.init()
         pygame.font.init()
 
@@ -356,7 +360,7 @@ class DreamerDebugDisplay:
         self.screen.fill(WHITE)
         pygame.display.update()
 
-    def next_frame(self, frame_orig: np.ndarray, frame_hall: np.ndarray=None):
+    def next_frame(self, frame_orig: np.ndarray, frame_hall: np.ndarray):
         if self.is_exit_requested:
             self.ui_events_thread.join()
             pygame.quit()
@@ -382,6 +386,8 @@ class DreamerDebugDisplay:
 
         orig_surface = pygame.surfarray.make_surface(prepare_frame(frame_orig))
         hall_surface = pygame.surfarray.make_surface(prepare_frame(frame_hall))
+        orig_surface = pygame.transform.scale(orig_surface, (self.img_width, self.img_height))
+        hall_surface = pygame.transform.scale(hall_surface,  (self.img_width, self.img_height))
         self.display_orig.blit(orig_surface, (0, 0))
         self.display_hall.blit(hall_surface, (0, 0))
 
@@ -421,7 +427,7 @@ class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVec
         state = self._resize_image(state)
         self.h0, self.z0 = self.model.bootstrap(self._batch(state))
         self.orig_state = state
-        return self._unbatch(self.z0)
+        return state, self._unbatch(self.z0)
 
     def step(self, action):
         state, reward, done, meta = self.orig_env.step(action)
@@ -429,7 +435,7 @@ class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVec
         inputs = (self._batch(state), self._batch(action), self.h0, self.z0)
         self.h0, self.z0 = self.model.step_model(inputs)
         self.orig_state = state
-        return self._unbatch(self.z0), reward, done, meta
+        return (state, self._unbatch(self.z0)), reward, done, meta
 
     def render(self, mode="human"):
         if not self.debug:
