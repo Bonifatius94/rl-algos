@@ -205,7 +205,7 @@ class DreamerModel:
         concat_in = Concatenate()
         flatten_repr = Flatten()
         expand_timeseries = Lambda(lambda x: tf.expand_dims(x, axis=1))
-        dense_in = Dense(settings.hidden_dims[0], activation="linear")
+        dense_in = Dense(settings.hidden_dims[0], activation="linear", name="gru_in")
         rnn = GRU(settings.hidden_dims[0], return_state=True)
         # TODO: think about stacking multiple GRU cells
 
@@ -217,7 +217,7 @@ class DreamerModel:
     def _create_transition_model(settings: DreamerSettings) -> Model:
         # hidden state t+1 -> representation t+1
         model_in = Input(settings.hidden_dims, name="h0")
-        dense = Dense(settings.repr_dims_flat)
+        dense = Dense(settings.repr_dims_flat, name="trans_in")
         reshape = Reshape(settings.repr_dims)
         st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
         model_out = st_categorical(reshape(dense(model_in)))
@@ -230,7 +230,7 @@ class DreamerModel:
         enc_in = Input(settings.enc_dims, name="enc_obs")
         h_in = Input(settings.hidden_dims, name="h1")
         concat = Concatenate()
-        dense = Dense(settings.repr_dims_flat)
+        dense = Dense(settings.repr_dims_flat, name="rep_concat")
         reshape = Reshape(settings.repr_dims)
         st_categorical = STGradsOneHotCategorical(settings.repr_dims)
         model_out = st_categorical(reshape(dense(concat([enc_in, h_in]))))
@@ -260,7 +260,7 @@ class DreamerModel:
         drop_3 = Dropout(rate=settings.dropout_rate)
         drop_4 = Dropout(rate=settings.dropout_rate)
         flatten = Flatten()
-        dense_out = Dense(settings.enc_dims[0], activation="linear")
+        dense_out = Dense(settings.enc_dims[0], activation="linear", name="enc_dense")
 
         prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(model_in))))))))
         model_out = dense_out(flatten(prep_model_convs))
@@ -273,7 +273,7 @@ class DreamerModel:
         upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
 
         model_in = Input(settings.repr_out_dims_flat, name="repr_out")
-        dense_in = Dense(upscale_source_dims, activation="linear")
+        dense_in = Dense(upscale_source_dims, activation="linear", name="dec_in")
         reshape_in = Reshape((settings.obs_dims[0] // 8, settings.obs_dims[1] // 8, -1))
         cnn_1 = Conv2DTranspose(8, (3, 3), strides=(2, 2), padding="same", activation="relu")
         cnn_2 = Conv2DTranspose(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
@@ -293,10 +293,10 @@ class DreamerModel:
     def _create_reward_model(settings: DreamerSettings) -> Model:
         # concat(representation, hidden state) -> (reward, done)
         model_in = Input(settings.repr_out_dims_flat, name="repr_out")
-        dense_1 = Dense(64, "relu")
-        dense_2 = Dense(64, "relu")
-        reward = Dense(1, activation="linear")
-        terminal = Dense(2)
+        dense_1 = Dense(64, "relu", name="rew1")
+        dense_2 = Dense(64, "relu", name="rew2")
+        reward = Dense(1, activation="linear", name="rew3")
+        terminal = Dense(2, name="rew4")
         st_categorical = STGradsOneHotCategorical(2)
         argmax = ArgmaxLayer()
 

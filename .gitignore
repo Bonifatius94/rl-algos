@@ -3,3 +3,5 @@ model
 .vscode
 .pytest_cache
 __pycache__
+venv
+.idea
