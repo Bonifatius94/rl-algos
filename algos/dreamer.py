@@ -402,25 +402,35 @@ class DreamerDebugDisplay:
 @dataclass
 class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVectorEnv
     orig_env: gym.Env
-    model: DreamerModel
+    settings: DreamerSettings
     debug: bool = False
-    display_factory: Callable[[], DreamerDebugDisplay] = field(default=lambda: None)
+    debug_scaling: float = 1.0
+    model: DreamerModel = field(init=False)
+    action_space: gym.Space = field(init=False)
+    observation_space: gym.Space = field(init=False)
     h0: np.ndarray = field(init=False)
     z0: np.ndarray = field(init=False)
     orig_state: np.ndarray = field(init=False)
     display: DreamerDebugDisplay = field(init=False, default=None)
 
     def __post_init__(self):
+        self.model = DreamerModel(self.settings)
+
+        def rgb_image_obs_space(resolution):
+            low = np.zeros((resolution[0], resolution[1], 3), dtype=np.float32)
+            high = np.full((resolution[0], resolution[1], 3), 255, dtype=np.float32)
+            return gym.spaces.Box(low=low, high=high, dtype=np.float32)
+
+        resolution = self.settings.obs_dims[:2]
+        self.observation_space = gym.spaces.Tuple((
+            rgb_image_obs_space(resolution),
+            rgb_image_obs_space(resolution)))
+
+        self.action_space = self.orig_env.action_space
+
         if self.debug and not self.display:
-            self.display = self.display_factory()
-
-    @property
-    def observation_space(self):
-        return self.orig_env.observation_space
-
-    @property
-    def action_space(self):
-        return self.orig_env.action_space
+            self.display = DreamerDebugDisplay(
+                resolution[1], resolution[0], self.debug_scaling)
 
     def reset(self):
         state = self.orig_env.reset()
@@ -449,7 +459,7 @@ class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVec
         self.display.next_frame(self.orig_state, self._unbatch(hallucinated_state))
 
     def seed(self, seed: int):
-        self.orig_env.seed(seed) # seed environment
+        self.orig_env.seed(seed)
         self.model.seed(seed)
 
     def _batch(self, arr: np.ndarray) -> np.ndarray:
