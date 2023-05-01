@@ -6,7 +6,6 @@ from signal import signal, SIGINT
 
 import gym
 import numpy as np
-
 import pygame
 from PIL import Image
 
@@ -20,28 +19,7 @@ from keras.layers import \
     Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
-from keras.losses import MSE, kullback_leibler_divergence, sparse_categorical_crossentropy
-
-
-@dataclass
-class Trajectory:
-    states: np.ndarray
-    zs: np.ndarray
-    actions: np.ndarray
-    rewards: np.ndarray
-
-    def __post_init__(self):
-        if self.actions.shape[0] != self.rewards.shape[0]:
-            raise ValueError(
-                "Invalid trajectory! The amount of actions and rewards needs to be the same!")
-        if self.actions.shape[0] + 1 != self.states.shape[0] \
-                or self.states.shape[0] != self.zs.shape[0]:
-            raise ValueError(
-                f"Invalid trajectory! Expected {self.rewards.shape[0] + 1} states!")
-
-    @property
-    def timesteps(self) -> int:
-        return self.actions.shape[0]
+from keras.losses import MSE, kullback_leibler_divergence
 
 
 @dataclass
@@ -87,7 +65,7 @@ class DreamerModel:
     def __init__(self, settings: DreamerSettings):
         self.settings = settings
         self.optimizer = Adam()
-        self.env_model, self.dream_model, self.step_model, self.render_model = \
+        self.env_model, self.bootstrap_model, self.step_model, self.render_model = \
             DreamerModel._create_models(settings)
 
     def seed(self, seed: int):
@@ -95,15 +73,15 @@ class DreamerModel:
 
     def summary(self):
         self.env_model.summary()
-        self.dream_model.summary()
         self.step_model.summary()
+        self.render_model.summary()
 
     def bootstrap(self, initial_state: np.ndarray):
         batch_size = initial_state.shape[0]
         a_in = tf.zeros([batch_size] + self.settings.action_dims)
         h_in = tf.zeros([batch_size] + self.settings.hidden_dims)
         z_in = tf.zeros([batch_size] + self.settings.repr_dims)
-        _, __, ___, h0, z0 = self.env_model((initial_state, a_in, h_in, z_in))
+        h0, z0 = self.bootstrap_model((initial_state, a_in, h_in, z_in))
         return h0, z0
 
     @tf.function
@@ -155,6 +133,7 @@ class DreamerModel:
         h0 = Input(settings.hidden_dims, name="h0")
         z0 = Input(settings.repr_dims, name="z0")
 
+        # TODO: rename to "training_model", bake the loss into the last layers
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
         z1 = repr_model((s1_enc, h1))
@@ -167,15 +146,13 @@ class DreamerModel:
             outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
             name="env_model")
 
+        s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
-        z1_hat = trans_model(h1)
-        out = repr_out_model((z1_hat, h1))
-        r1_hat = reward_model(out)
-        s1_hat = decoder_model(out)
-        dream_model = Model(
-            inputs=[a0, h0, z0],
-            outputs=[z1_hat, s1_hat, r1_hat, h1],
-            name="dream_model")
+        z1 = repr_model((s1_enc, h1))
+        bootstrap_model = Model(
+            inputs=[s1, a0, h0, z0],
+            outputs=[h1, z1],
+            name="bootstrap_model")
 
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
@@ -192,7 +169,7 @@ class DreamerModel:
             outputs=[s1_hat],
             name="render_model")
 
-        return env_model, dream_model, step_model, render_model
+        return env_model, bootstrap_model, step_model, render_model
 
     @staticmethod
     def _create_history_model(settings: DreamerSettings) -> Model:
@@ -399,64 +376,56 @@ class DreamerDebugDisplay:
         pygame.display.update()
 
 
+RenderSubscriber = Callable[[np.ndarray, np.ndarray], None]
+TrajectorySubscriber = Callable[[np.ndarray, np.ndarray, np.ndarray,
+                                 np.ndarray, np.ndarray], None]
+
+
 @dataclass
-class DreamerEnvWrapper(gym.Env): # TODO: think about extending this to AsyncVectorEnv
+class DreamerEnvWrapper(gym.Env):
     orig_env: gym.Env
     settings: DreamerSettings
+    model: DreamerModel = field(default=None)
+    render_output: RenderSubscriber = field(default=lambda frame_orig, frame_hall: None)
+    collect_step: TrajectorySubscriber = field(default=lambda s1, z1, h1, a, r: None)
     debug: bool = False
     debug_scaling: float = 1.0
-    model: DreamerModel = field(init=False)
+
     action_space: gym.Space = field(init=False)
     observation_space: gym.Space = field(init=False)
     h0: np.ndarray = field(init=False)
     z0: np.ndarray = field(init=False)
-    orig_state: np.ndarray = field(init=False)
-    display: DreamerDebugDisplay = field(init=False, default=None)
+    frame_orig: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        self.model = DreamerModel(self.settings)
+        if not self.model:
+            self.model = DreamerModel(self.settings)
 
-        def rgb_image_obs_space(resolution):
-            low = np.zeros((resolution[0], resolution[1], 3), dtype=np.float32)
-            high = np.full((resolution[0], resolution[1], 3), 255, dtype=np.float32)
-            return gym.spaces.Box(low=low, high=high, dtype=np.float32)
-
-        resolution = self.settings.obs_dims[:2]
-        self.observation_space = gym.spaces.Tuple((
-            rgb_image_obs_space(resolution),
-            rgb_image_obs_space(resolution)))
-
+        low = np.zeros(self.settings.repr_dims, dtype=np.float32)
+        high = np.ones(self.settings.repr_dims, dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
         self.action_space = self.orig_env.action_space
-
-        if self.debug and not self.display:
-            self.display = DreamerDebugDisplay(
-                resolution[1], resolution[0], self.debug_scaling)
 
     def reset(self):
         state = self.orig_env.reset()
         state = self._resize_image(state)
         self.h0, self.z0 = self.model.bootstrap(self._batch(state))
-        self.orig_state = state
-        return state, self._unbatch(self.z0)
+        self.frame_orig, repr = state, self._unbatch(self.z0)
+        self.collect_step(state, repr, self.h0, None, None)
+        return repr
 
     def step(self, action):
         state, reward, done, meta = self.orig_env.step(action)
         state = self._resize_image(state)
         inputs = (self._batch(state), self._batch(action), self.h0, self.z0)
         self.h0, self.z0 = self.model.step_model(inputs)
-        self.orig_state = state
-        return (state, self._unbatch(self.z0)), reward, done, meta
+        self.frame_orig, repr = state, self._unbatch(self.z0)
+        self.collect_step(state, repr, self.h0, action, reward)
+        return repr, reward, done, meta
 
     def render(self, mode="human"):
-        if not self.debug:
-            raise RuntimeError(
-                "Cannot render outside of debug mode! Consider setting debug=True!")
-        if not self.display:
-            raise RuntimeError(
-                "Cannot render without display! Consider initializing the display factory!")
-
-        hallucinated_state = self.model.render_model((self.z0, self.h0))
-        self.display.next_frame(self.orig_state, self._unbatch(hallucinated_state))
+        frame_hall = self.model.render_model((self.z0, self.h0))
+        self.render_output(self.frame_orig, self._unbatch(frame_hall))
 
     def seed(self, seed: int):
         self.orig_env.seed(seed)
