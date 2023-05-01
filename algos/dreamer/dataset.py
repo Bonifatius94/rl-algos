@@ -50,7 +50,7 @@ def sample_trajectory(
             traj_rewards.append(r)
 
     env.collect_step = append_timestep
-    play_episode(env, actor, max_steps=100)
+    play_episode(env, actor)
     env.collect_step = lambda s1, z1, h1, a, r: None
 
     terms = np.zeros((len(traj_rewards)))
