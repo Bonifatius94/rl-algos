@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Any
 from dataclasses import dataclass, field
 
 import gym
@@ -12,6 +12,25 @@ from algos.dreamer.model import DreamerModel
 RenderSubscriber = Callable[[np.ndarray, np.ndarray], None]
 TrajectorySubscriber = Callable[[np.ndarray, np.ndarray, np.ndarray,
                                  np.ndarray, np.ndarray], None]
+
+
+def play_episode(
+        env: gym.Env,
+        actor: Callable[[Any], Any]=None,
+        render: bool=False,
+        max_steps: int=float("inf")):
+    actor = actor if actor else lambda x: env.action_space.sample()
+    render_frame = env.render if render else lambda: None
+    state = env.reset()
+    render_frame()
+    done, i = False, 0
+    while True:
+        action = actor(state)
+        state, __, done, ___ = env.step(action)
+        render_frame()
+        if done or i >= max_steps:
+            break
+        i += 1
 
 
 @dataclass

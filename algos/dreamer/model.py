@@ -1,3 +1,4 @@
+from math import ceil
 from typing import List, Union
 import numpy as np
 
@@ -175,38 +176,39 @@ class DreamerModel:
         return h0, z0
 
     @tf.function
-    def train(self, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray):
+    def train(
+            self, states: np.ndarray, zs: np.ndarray, hs: np.ndarray,
+            actions: np.ndarray, rewards: np.ndarray, terms: np.ndarray):
+
         BETA = 0.1
+        BATCH_STEPS = 16
+
         timesteps = actions.shape[0]
+        num_batches = ceil(actions.shape[0] / BATCH_STEPS)
         loss = 0.0
-        with tf.GradientTape() as tape:
 
-            h0, z0 = self.bootstrap(tf.expand_dims(states[0], axis=0))
+        for i in range(num_batches - 1):
+            with tf.GradientTape() as tape:
 
-            # TODO: define model as recurrent cell to unroll
-            #       multiple steps at once with standard api
-
-            # unroll trajectory
-            for t in range(timesteps):
-                a0, r1, s1 = actions[t], rewards[t], states[t+1]
-                a0 = tf.expand_dims(a0, axis=0)
-                r1 = tf.expand_dims(r1, axis=0)
-                s1 = tf.expand_dims(s1, axis=0)
-                term = tf.constant(1.0 if t == timesteps - 1 else 0.0, shape=(1, 1))
+                start, end = i * BATCH_STEPS, (i+1) * BATCH_STEPS
+                s1 = states[start+BATCH_STEPS:end+BATCH_STEPS]
+                z0 = zs[start:end]
+                h0 = hs[start:end]
+                a0 = actions[start:end]
+                r1 = rewards[start:end]
+                ts = terms[start:end]
 
                 z1_hat, s1_hat, (r1_hat, term_hat), h1, z1 = \
                     self.env_model((s1, a0, tf.stop_gradient(h0), tf.stop_gradient(z0)))
 
                 reward_loss = MSE(r1, r1_hat)
                 obs_loss = MSE(s1, s1_hat)
-                term_loss = MSE(term, term_hat)
+                term_loss = MSE(ts, term_hat)
                 repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
                 loss += reward_loss + obs_loss + term_loss + repr_loss
 
-                h0, z0 = h1, z1
-
-        grads = tape.gradient(loss, self.env_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+            grads = tape.gradient(loss, self.env_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
 
     @staticmethod
     def _create_models(settings: DreamerSettings):

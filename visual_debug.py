@@ -1,28 +1,7 @@
-from typing import Callable, Any
 import gym
-
-from algos.dreamer import \
-    DreamerSettings, DreamerEnvWrapper, DreamerDebugDisplay
-
-
-def play_episode(
-        env: gym.Env,
-        actor: Callable[[Any], Any]=None,
-        render: bool=False,
-        max_steps: int=float("inf")):
-    actor = actor if actor else lambda x: env.action_space.sample()
-    render_frame = env.render if render else lambda: None
-    state = env.reset()
-    render_frame()
-    done = False
-    i = 0
-    while not done:
-        action = actor(state)
-        state, __, done, ___ = env.step(action)
-        render_frame()
-        if done or i >= max_steps:
-            break
-        i += 1
+from algos.dreamer.config import DreamerSettings
+from algos.dreamer.env import DreamerEnvWrapper, play_episode
+from algos.dreamer.display import DreamerDebugDisplay
 
 
 def visual_debugging():
