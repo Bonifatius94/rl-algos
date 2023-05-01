@@ -183,29 +183,26 @@ class DreamerModel:
         BETA = 0.1
         BATCH_STEPS = 16
 
-        timesteps = actions.shape[0]
         num_batches = ceil(actions.shape[0] / BATCH_STEPS)
-        loss = 0.0
 
         for i in range(num_batches - 1):
+            start, end = i * BATCH_STEPS, (i+1) * BATCH_STEPS
+            s1 = states[start:end]
+            z0 = zs[start:end]
+            h0 = hs[start:end]
+            a0 = actions[start:end]
+            r1 = rewards[start:end]
+            term = terms[start:end]
+
             with tf.GradientTape() as tape:
+                z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
-                start, end = i * BATCH_STEPS, (i+1) * BATCH_STEPS
-                s1 = states[start+BATCH_STEPS:end+BATCH_STEPS]
-                z0 = zs[start:end]
-                h0 = hs[start:end]
-                a0 = actions[start:end]
-                r1 = rewards[start:end]
-                ts = terms[start:end]
-
-                z1_hat, s1_hat, (r1_hat, term_hat), h1, z1 = \
-                    self.env_model((s1, a0, tf.stop_gradient(h0), tf.stop_gradient(z0)))
-
-                reward_loss = MSE(r1, r1_hat)
-                obs_loss = MSE(s1, s1_hat)
-                term_loss = MSE(ts, term_hat)
+                reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
+                obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
+                term_loss = MSE(term, term_hat)
                 repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
-                loss += reward_loss + obs_loss + term_loss + repr_loss
+
+                loss = reward_loss + obs_loss + term_loss + repr_loss
 
             grads = tape.gradient(loss, self.env_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))

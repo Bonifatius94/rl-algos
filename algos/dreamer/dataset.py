@@ -1,7 +1,8 @@
-from typing import Callable, Any
+from typing import Callable, Any, List
 from dataclasses import dataclass
 
 import numpy as np
+import tensorflow as tf
 
 from algos.dreamer.env import \
     DreamerEnvWrapper, play_episode
@@ -17,14 +18,14 @@ class Trajectory:
     terms: np.ndarray
 
     def __post_init__(self):
-        if self.actions.shape[0] != self.rewards.shape[0]:
+        if self.actions.shape[0] != self.rewards.shape[0] \
+                and self.actions.shape[0] != self.zs.shape[0] \
+                and self.actions.shape[0] != self.hs.shape[0] \
+                and self.actions.shape[0] != self.actions.shape[0] \
+                and self.actions.shape[0] != self.rewards.shape[0] \
+                and self.actions.shape[0] != self.terms.shape[0]:
             raise ValueError(
-                "Invalid trajectory! The amount of actions and rewards needs to be the same!")
-        if self.actions.shape[0] + 1 != self.states.shape[0] \
-                or self.states.shape[0] != self.zs.shape[0] \
-                or self.states.shape[0] != self.hs.shape[0]:
-            raise ValueError(
-                f"Invalid trajectory! Expected {self.rewards.shape[0] + 1} states!")
+                "Invalid trajectory! The amount of tuples needs to be the same for all arrays!")
 
     @property
     def timesteps(self) -> int:
@@ -41,10 +42,10 @@ def sample_trajectory(
     traj_rewards = []
 
     def append_timestep(s1, z1, h1, a, r):
-        traj_states.append(s1)
         traj_zs.append(z1)
-        traj_hs.append(h1)
+        traj_hs.append(np.squeeze(h1))
         if a is not None:
+            traj_states.append(s1)
             traj_actions.append(a)
             traj_rewards.append(r)
 
@@ -58,3 +59,17 @@ def sample_trajectory(
     return Trajectory(
         np.array(traj_states), np.array(traj_zs), np.array(traj_hs),
         np.array(traj_actions), np.array(traj_rewards), terms)
+
+
+def generate_dataset(trajs: List[Trajectory]) -> tf.data.Dataset:
+
+    def traj_to_dataset(traj: Trajectory) -> tf.data.Dataset:
+        return tf.data.Dataset.from_tensor_slices(tensors=(
+            traj.states, traj.zs, traj.hs,
+            traj.actions, traj.rewards, traj.terms))
+
+    datasets = [traj_to_dataset(t) for t in trajs]
+    ds = datasets[0]
+    for i in range(len(trajs) - 1):
+        ds = ds.concatenate(datasets[i+1])
+    return ds

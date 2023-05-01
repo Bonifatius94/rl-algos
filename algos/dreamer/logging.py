@@ -22,6 +22,7 @@ class Mp4VideoWriter:
 
 
 def record_episode(env: DreamerEnvWrapper, video_file: str):
+    # TODO: figure out why the recorded files are empty
     resolution = env.settings.obs_dims[:2]
     resolution = (resolution[1] * 2, resolution[0])
     video_writer = Mp4VideoWriter(video_file, resolution)
