@@ -9,7 +9,7 @@ from algos.dreamer.model import DreamerModel
 
 def train_interactive(num_epochs: int, num_trajs: int, train_steps_per_epoch: int):
     orig_env = gym.make("ALE/Pong-v5")
-    settings = DreamerSettings([1], [32, 32, 3], [32, 32], [512], [64])
+    settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [64])
     model = DreamerModel(settings)
     env = DreamerEnvWrapper(orig_env, settings, model=model)
 
@@ -34,4 +34,4 @@ def train_interactive(num_epochs: int, num_trajs: int, train_steps_per_epoch: in
 
 
 if __name__ == "__main__":
-    train_interactive(1000, 10, 50)
+    train_interactive(1000, 3, 500)
