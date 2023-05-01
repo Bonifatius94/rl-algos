@@ -176,36 +176,21 @@ class DreamerModel:
         return h0, z0
 
     @tf.function
-    def train(
-            self, states: np.ndarray, zs: np.ndarray, hs: np.ndarray,
-            actions: np.ndarray, rewards: np.ndarray, terms: np.ndarray):
-
+    def train(self, s1, z0, h0, a0, r1, t1):
         BETA = 0.1
-        BATCH_STEPS = 16
 
-        num_batches = ceil(actions.shape[0] / BATCH_STEPS)
+        with tf.GradientTape() as tape:
+            z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
-        for i in range(num_batches - 1):
-            start, end = i * BATCH_STEPS, (i+1) * BATCH_STEPS
-            s1 = states[start:end]
-            z0 = zs[start:end]
-            h0 = hs[start:end]
-            a0 = actions[start:end]
-            r1 = rewards[start:end]
-            term = terms[start:end]
+            reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
+            obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
+            term_loss = MSE(t1, term_hat)
+            repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
 
-            with tf.GradientTape() as tape:
-                z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
+            loss = reward_loss + obs_loss + term_loss + repr_loss
 
-                reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
-                obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
-                term_loss = MSE(term, term_hat)
-                repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
-
-                loss = reward_loss + obs_loss + term_loss + repr_loss
-
-            grads = tape.gradient(loss, self.env_model.trainable_variables)
-            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+        grads = tape.gradient(loss, self.env_model.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
 
     @staticmethod
     def _create_models(settings: DreamerSettings):
