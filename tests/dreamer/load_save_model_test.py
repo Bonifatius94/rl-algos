@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import tensorflow as tf
-from algos.dreamer import DreamerSettings, DreamerModel
+
+from algos.dreamer.config import DreamerSettings
+from algos.dreamer.model import DreamerModel
 
 
 def test_env_model_save_and_load_weights():

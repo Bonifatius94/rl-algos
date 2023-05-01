@@ -1,16 +1,10 @@
-from typing import List, Union, Callable
-from dataclasses import dataclass, field
-from threading import Thread
-from time import sleep
-from signal import signal, SIGINT
-
-import gym
+from typing import List, Union
 import numpy as np
-import pygame
-from PIL import Image
 
+# info: disable verbose tensorflow logging
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow import keras
@@ -21,23 +15,7 @@ from keras.layers import \
 from keras.optimizers import Adam
 from keras.losses import MSE, kullback_leibler_divergence
 
-
-@dataclass
-class DreamerSettings:
-    action_dims: List[int]
-    obs_dims: List[int]
-    repr_dims: List[int]
-    hidden_dims: List[int]
-    enc_dims: List[int]
-    dropout_rate: float = 0.2
-
-    @property
-    def repr_dims_flat(self) -> int:
-        return self.repr_dims[0] * self.repr_dims[1]
-
-    @property
-    def repr_out_dims_flat(self) -> int:
-        return self.repr_dims[0] * self.repr_dims[1] + self.hidden_dims[0]
+from algos.dreamer.config import DreamerSettings
 
 
 class STGradsOneHotCategorical:
@@ -281,164 +259,3 @@ class DreamerModel:
         reward_out = reward(prep)
         terminal_out = argmax(st_categorical(terminal(prep)))
         return Model(inputs=model_in, outputs=[reward_out, terminal_out], name="reward_model")
-
-
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-
-
-class DreamerDebugDisplay:
-    def __init__(self, img_width: int, img_height: int, scaling: float=1):
-        self.scaling = scaling
-        self.img_width, self.img_height = img_width * scaling, img_height * scaling
-        pygame.init()
-        pygame.font.init()
-
-        window_shape = (2 * self.img_width + 30, self.img_height + 50)
-        self.screen = pygame.display.set_mode(window_shape, pygame.RESIZABLE)
-        self.std_font = pygame.font.SysFont('Consolas', 14, bold=True)
-
-        display_shape = (self.img_width, self.img_height)
-        label_shape = (self.img_width, 30)
-        self.display_orig = pygame.surface.Surface(display_shape)
-        self.display_hall = pygame.surface.Surface(display_shape)
-        self.label_orig = pygame.surface.Surface(label_shape)
-        self.label_hall = pygame.surface.Surface(label_shape)
-
-        def render_text(text: str) -> pygame.surface.Surface:
-            return self.std_font.render(text, True, BLACK, WHITE)
-
-        self.label_orig_text = render_text("original")
-        self.label_hall_text = render_text("hallucinated")
-
-        self.label_orig_offset = (10, 10)
-        self.label_hall_offset = (self.img_width + 20, 10)
-        self.display_orig_offset = (10, 40)
-        self.display_hall_offset = (self.img_width + 20, 40)
-
-        self.is_exit_requested = False
-
-        def process_event_queue():
-            while not self.is_exit_requested:
-                for e in pygame.event.get():
-                    if e.type == pygame.QUIT:
-                        self.is_exit_requested = True
-                sleep(0.01)
-
-        self.ui_events_thread = Thread(target=process_event_queue)
-        self.ui_events_thread.start()
-
-        def handle_sigint(signum, frame):
-            self.is_exit_requested = True
-
-        signal(SIGINT, handle_sigint)
-
-    def clear(self):
-        self.screen.fill(WHITE)
-        pygame.display.update()
-
-    def next_frame(self, frame_orig: np.ndarray, frame_hall: np.ndarray):
-        if self.is_exit_requested:
-            self.ui_events_thread.join()
-            pygame.quit()
-            exit()
-
-        self.screen.fill(WHITE)
-
-        def show_text_centered(
-                surface: pygame.surface.Surface,
-                text: pygame.surface.Surface):
-            total_width, total_height = surface.get_size()
-            text_width, text_height = text.get_size()
-            x_offset = total_width / 2 - text_width / 2
-            y_offset = total_height / 2 - text_height / 2
-            surface.fill(WHITE)
-            surface.blit(text, (x_offset, y_offset))
-
-        def prepare_frame(image: np.ndarray) -> np.ndarray:
-            return np.rot90(np.fliplr(np.clip(image, 0, 255)))
-
-        show_text_centered(self.label_orig, self.label_orig_text)
-        show_text_centered(self.label_hall, self.label_hall_text)
-
-        orig_surface = pygame.surfarray.make_surface(prepare_frame(frame_orig))
-        hall_surface = pygame.surfarray.make_surface(prepare_frame(frame_hall))
-        orig_surface = pygame.transform.scale(orig_surface, (self.img_width, self.img_height))
-        hall_surface = pygame.transform.scale(hall_surface,  (self.img_width, self.img_height))
-        self.display_orig.blit(orig_surface, (0, 0))
-        self.display_hall.blit(hall_surface, (0, 0))
-
-        self.screen.blit(self.display_orig, self.display_orig_offset)
-        self.screen.blit(self.display_hall, self.display_hall_offset)
-        self.screen.blit(self.label_orig, self.label_orig_offset)
-        self.screen.blit(self.label_hall, self.label_hall_offset)
-
-        pygame.display.update()
-
-
-RenderSubscriber = Callable[[np.ndarray, np.ndarray], None]
-TrajectorySubscriber = Callable[[np.ndarray, np.ndarray, np.ndarray,
-                                 np.ndarray, np.ndarray], None]
-
-
-@dataclass
-class DreamerEnvWrapper(gym.Env):
-    orig_env: gym.Env
-    settings: DreamerSettings
-    model: DreamerModel = field(default=None)
-    render_output: RenderSubscriber = field(default=lambda frame_orig, frame_hall: None)
-    collect_step: TrajectorySubscriber = field(default=lambda s1, z1, h1, a, r: None)
-    debug: bool = False
-    debug_scaling: float = 1.0
-
-    action_space: gym.Space = field(init=False)
-    observation_space: gym.Space = field(init=False)
-    h0: np.ndarray = field(init=False)
-    z0: np.ndarray = field(init=False)
-    frame_orig: np.ndarray = field(init=False)
-
-    def __post_init__(self):
-        if not self.model:
-            self.model = DreamerModel(self.settings)
-
-        low = np.zeros(self.settings.repr_dims, dtype=np.float32)
-        high = np.ones(self.settings.repr_dims, dtype=np.float32)
-        self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
-        self.action_space = self.orig_env.action_space
-
-    def reset(self):
-        state = self.orig_env.reset()
-        state = self._resize_image(state)
-        self.h0, self.z0 = self.model.bootstrap(self._batch(state))
-        self.frame_orig, repr = state, self._unbatch(self.z0)
-        self.collect_step(state, repr, self.h0, None, None)
-        return repr
-
-    def step(self, action):
-        state, reward, done, meta = self.orig_env.step(action)
-        state = self._resize_image(state)
-        inputs = (self._batch(state), self._batch(action), self.h0, self.z0)
-        self.h0, self.z0 = self.model.step_model(inputs)
-        self.frame_orig, repr = state, self._unbatch(self.z0)
-        self.collect_step(state, repr, self.h0, action, reward)
-        return repr, reward, done, meta
-
-    def render(self, mode="human"):
-        frame_hall = self.model.render_model((self.z0, self.h0))
-        self.render_output(self.frame_orig, self._unbatch(frame_hall))
-
-    def seed(self, seed: int):
-        self.orig_env.seed(seed)
-        self.model.seed(seed)
-
-    def _batch(self, arr: np.ndarray) -> np.ndarray:
-        return np.expand_dims(arr, axis=0)
-
-    def _unbatch(self, arr: np.ndarray) -> np.ndarray:
-        return np.squeeze(arr, axis=0)
-
-    def _resize_image(self, orig_image: np.ndarray) -> np.ndarray:
-        width, height, _ = self.model.settings.obs_dims
-        img = Image.fromarray(orig_image)
-        img = img.resize((width, height), Image.Resampling.LANCZOS)
-        return np.array(img)

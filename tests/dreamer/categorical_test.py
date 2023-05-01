@@ -1,5 +1,5 @@
 import numpy as np
-from algos.dreamer import STGradsOneHotCategorical, ArgmaxLayer
+from algos.dreamer.model import STGradsOneHotCategorical, ArgmaxLayer
 
 
 def test_argmax():

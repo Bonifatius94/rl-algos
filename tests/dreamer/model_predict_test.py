@@ -1,6 +1,8 @@
 from typing import Iterable
 import numpy as np
-from algos.dreamer import DreamerSettings, DreamerModel
+
+from algos.dreamer.config import DreamerSettings
+from algos.dreamer.model import DreamerModel
 
 
 def test_env_model_predict_shapes_correct():
