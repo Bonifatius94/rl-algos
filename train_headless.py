@@ -7,7 +7,7 @@ from algos.dreamer.dataset import sample_trajectory
 from algos.dreamer.logging import record_episode
 
 
-def train(num_epochs: int, num_trajectories: int, debug_interval: int):
+def train_headless(num_epochs: int, num_trajectories: int, debug_interval: int):
     VIDEOS_ROOTDIR = "./videos"
     if os.path.exists(VIDEOS_ROOTDIR):
         os.system(f"rm -rf {VIDEOS_ROOTDIR}")
@@ -30,8 +30,8 @@ def train(num_epochs: int, num_trajectories: int, debug_interval: int):
 
         if (ep+1) % debug_interval == 0:
             video_file = os.path.join(VIDEOS_ROOTDIR, f"ep_{ep+1}.avi")
-            # TODO: figure out why the recorded files are empty
             record_episode(env, video_file)
 
+
 if __name__ == "__main__":
-    train(1000000, 4, 1)
+    train_headless(1000000, 4, 10)
