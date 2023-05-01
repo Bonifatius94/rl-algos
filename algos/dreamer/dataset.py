@@ -57,7 +57,7 @@ def sample_trajectory(
     terms[-1] = 1.0
 
     return Trajectory(
-        np.array(traj_states), np.array(traj_zs), np.array(traj_hs),
+        np.array(traj_states), np.array(traj_zs[:-1]), np.array(traj_hs[:-1]),
         np.array(traj_actions), np.array(traj_rewards), terms)
 
 

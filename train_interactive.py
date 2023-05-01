@@ -2,12 +2,12 @@ import gym
 
 from algos.dreamer.config import DreamerSettings
 from algos.dreamer.env import DreamerEnvWrapper, play_episode
-from algos.dreamer.dataset import sample_trajectory
+from algos.dreamer.dataset import sample_trajectory, generate_dataset
 from algos.dreamer.display import DreamerDebugDisplay
 from algos.dreamer.model import DreamerModel
 
 
-def train_interactive(num_epochs: int, num_trajectories: int, debug_interval: int):
+def train_interactive(num_epochs: int, num_trajs: int, train_steps_per_epoch: int):
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [32, 32, 3], [32, 32], [512], [64])
     model = DreamerModel(settings)
@@ -18,19 +18,20 @@ def train_interactive(num_epochs: int, num_trajectories: int, debug_interval: in
     ui_env.render_output = display.next_frame
 
     actor = lambda x: env.action_space.sample()
-    trajs = [sample_trajectory(env, actor) for _ in range(num_trajectories)]
+    trajs = [sample_trajectory(env, actor) for _ in range(num_trajs)]
+    dataset = generate_dataset(trajs)
+    dataset = dataset.batch(32).repeat().shuffle(100)
+    batch_iter = iter(dataset)
 
     for ep in range(num_epochs):
         print(f"starting epoch {ep+1}")
 
-        for traj in trajs:
-            env.model.train(
-                traj.states,traj.zs, traj.hs,
-                traj.actions, traj.rewards, traj.terms)
+        for _ in range(train_steps_per_epoch):
+            s1, z0, h0, a0, r1, t1 = batch_iter.next()
+            env.model.train(s1, z0, h0, a0, r1, t1)
 
-        if (ep+1) % debug_interval == 0:
-            play_episode(ui_env, render=True, max_steps=100)
+        play_episode(ui_env, render=True, max_steps=100)
 
 
 if __name__ == "__main__":
-    train_interactive(1000000, 4, 1)
+    train_interactive(1000, 10, 50)
