@@ -11,7 +11,6 @@ from algos.ppo import PPOAgent, PPOTrainingSettings
 def train_interactive():
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
-    train_config = DreamerTrainSettings()
     model = DreamerModel(settings)
     env = DreamerEnvWrapper(orig_env, settings, model=model)
 
@@ -21,6 +20,9 @@ def train_interactive():
     render = lambda ep: play_episode(ui_env, render=True, max_steps=100)
 
     ppo_config = PPOTrainingSettings(obs_shape=settings.repr_dims, num_actions=6)
+    train_config = DreamerTrainSettings(
+        n_envs=ppo_config.n_envs,
+        steps_per_update=ppo_config.steps_per_update)
     ppo_agent = PPOAgent(ppo_config)
     train(train_config, env, ppo_agent, render)
 

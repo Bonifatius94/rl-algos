@@ -16,11 +16,13 @@ def train_headless():
 
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
-    train_config = DreamerTrainSettings()
     env = DreamerEnvWrapper(orig_env, settings)
     render = lambda ep: record_episode(env, os.path.join(VIDEOS_ROOTDIR, f"ep_{ep+1}.avi"))
 
     ppo_config = PPOTrainingSettings(obs_shape=settings.repr_dims, num_actions=6)
+    train_config = DreamerTrainSettings(
+        n_envs=ppo_config.n_envs,
+        steps_per_update=ppo_config.steps_per_update)
     ppo_agent = PPOAgent(ppo_config)
     train(train_config, env, ppo_agent, render)
 

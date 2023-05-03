@@ -27,4 +27,10 @@ class DreamerTrainSettings:
     batch_size: int=64
     epochs: int=1000
     world_epochs: int=2 # 10
-    agent_timesteps: int=10000
+    agent_epochs: int=5
+    n_envs: int=32
+    steps_per_update: int=512
+
+    @property
+    def agent_timesteps(self) -> int:
+        return self.agent_epochs * self.steps_per_update + 1

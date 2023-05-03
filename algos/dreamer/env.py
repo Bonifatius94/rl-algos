@@ -69,25 +69,28 @@ class DreamVecEnv(gym.vector.VectorEnv):
         self.fetch_initial_state = fetch_initial_state
         self.h0: np.ndarray = None
         self.z0: np.ndarray = None
+        self.closed = True
 
     def reset(self):
         state = np.array([self.fetch_initial_state() for _ in range(self.num_envs)])
-        self.h0, self.z0 = self.model.bootstrap(state)
+        h0, z0 = self.model.bootstrap(state)
+        self.h0, self.z0 = h0.numpy(), z0.numpy()
         return self.z0
 
     def step(self, actions):
-        (r1, term), h1, z1 = self.model.dream_model(
-            (actions, self.h0, self.z0))
-        self.h0, self.z0 = h1, z1
+        (r1, term), h1, z1 = self.model.dream_model((actions, self.h0, self.z0))
+        self.h0, self.z0 = h1.numpy(), z1.numpy()
+        r1, term = np.squeeze(r1), np.squeeze(term.numpy())
 
-        done_envs, _ = np.where(term == 1)
-        if done_envs:
+        done_envs = np.where(term)[0]
+        num_dones = done_envs.shape[0]
+        if num_dones > 0:
             state = np.array([self.fetch_initial_state() for _ in range(len(done_envs))])
             h_temp, z_temp = self.model.bootstrap(state)
-            self.h0[done_envs] = h_temp # TODO: check if indexing is correct
-            self.h0[done_envs] = z_temp # TODO: check if indexing is correct
+            self.h0[done_envs] = h_temp
+            self.z0[done_envs] = z_temp
 
-        return z1, r1, term, None
+        return self.z0, r1, term, None
 
     def seed(self, seed: int):
         self.model.seed(seed)

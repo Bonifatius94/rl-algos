@@ -210,7 +210,7 @@ class PPOVecEnvRolloutBuffer:
         self.prob_dist_cache[t] = prob_dists
         self.baseline_cache[t] = baselines
         self.s0_cache[t] = states_before
-        self.actinon_cache[t] = actions
+        self.actinon_cache[t] = np.squeeze(actions) # TODO: add support for multi-dim actions
         self.reward_cache[t] = rewards
         self.done_cache[t] = dones
         self.step += 1
@@ -359,7 +359,8 @@ class PPOAgent:
 
         encode_obs = lambda x: x
         sample_actions = lambda pred: \
-            [int(np.random.choice(config.num_actions, 1, p=prob_dist)) for prob_dist in pred[0]]
+            np.expand_dims(np.array([int(np.random.choice(config.num_actions, 1, p=prob_dist))
+                      for prob_dist in pred[0]]), axis=1)
 
         self.predict_action = lambda obs: model.predict(np.expand_dims(obs, axis=0))
         self.train_session_factory = lambda env: VecEnvTrainingSession(
