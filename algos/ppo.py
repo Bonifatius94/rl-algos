@@ -1,6 +1,5 @@
-from typing import Any, Callable, Tuple, List, Union
+from typing import Any, Callable, Tuple, List, Union, Iterator
 from dataclasses import dataclass, field
-from random import shuffle
 
 import gym
 import numpy as np
@@ -78,26 +77,31 @@ class PPOModel:
         self.on_training_done = on_training_done
         self.optimizer: Optimizer = Adam(learning_rate=self.config.learn_rate, epsilon=1e-5)
         self.model = PPOModel.create_model(config.obs_shape, config.num_actions)
-        print(self.model.summary())
 
     @staticmethod
     def create_model(obs_shape: List[int], num_actions: int) -> Model:
         model_in = Input(obs_shape)
-        prep_cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), activation="relu")
-        prep_drop_1 = Dropout(rate=0.2)
-        prep_cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
-        prep_drop_2 = Dropout(rate=0.2)
-        prep_cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
-        prep_drop_3 = Dropout(rate=0.2)
-        prep_cnn_4 = Conv2D(8, (3, 3), strides=(2, 2), activation="relu")
-        prep_drop_4 = Dropout(rate=0.2)
-        prep_flatten = Flatten()
-        prep_out = Dense(256, activation="linear")
 
-        prep_model_convs = \
-            prep_drop_4(prep_cnn_4(prep_drop_3(prep_cnn_3(
-                prep_drop_2(prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))))
-        prep_model = prep_out(prep_flatten(prep_model_convs))
+        use_feature_extractor = False
+        if use_feature_extractor:
+            prep_cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), activation="relu")
+            prep_drop_1 = Dropout(rate=0.2)
+            prep_cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
+            prep_drop_2 = Dropout(rate=0.2)
+            prep_cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), activation="relu")
+            prep_drop_3 = Dropout(rate=0.2)
+            prep_cnn_4 = Conv2D(8, (3, 3), strides=(2, 2), activation="relu")
+            prep_drop_4 = Dropout(rate=0.2)
+            prep_flatten = Flatten()
+            prep_out = Dense(256, activation="linear")
+
+            prep_model_convs = \
+                prep_drop_4(prep_cnn_4(prep_drop_3(prep_cnn_3(
+                    prep_drop_2(prep_cnn_2(prep_drop_1(prep_cnn_1(model_in))))))))
+            prep_model = prep_out(prep_flatten(prep_model_convs))
+        else:
+            flatten = Flatten()
+            prep_model = flatten(model_in)
 
         actor_fc_1 = Dense(64, activation="relu")
         actor_fc_2 = Dense(64, activation="relu")
@@ -115,12 +119,10 @@ class PPOModel:
         prob_dists, baselines = prob_dists.numpy(), baselines.numpy()
         return prob_dists, np.squeeze(baselines)
 
-    def train(self, batches: List[TrainingBatch]):
+    def train(self, shuffled_batch_iter: Iterator[TrainingBatch]):
         for _ in range(self.config.update_epochs):
-            shuffle(batches)
-            for batch in batches:
-                shuffled_batch = PPOModel.shuffle_batch(batch)
-                self.train_step(shuffled_batch)
+            for batch in shuffled_batch_iter:
+                self.train_step(batch)
         self.on_training_done()
 
     @tf.function
@@ -143,7 +145,7 @@ class PPOModel:
             probs_new = tf.reduce_sum(tf.multiply(prob_dists_new, actions_onehot), axis=-1)
             probs_old = tf.reduce_sum(tf.multiply(prob_dists_old, actions_onehot), axis=-1)
 
-            # info: p_new / p_old = exp(log(p_new) - log(p_old)) -> no float errors for small p
+            # info: p_new / p_old = exp(log(p_new) - log(p_old))
             policy_ratio = (tf.math.exp(tf.math.log(probs_new + 1e-8) - tf.math.log(probs_old + 1e-8)))
             policy_ratio_clipped = tf.clip_by_value(policy_ratio, clip_lower, clip_upper)
             policy_loss = -1.0 * tf.reduce_mean(tf.minimum(
@@ -272,10 +274,10 @@ class VecEnvTrainingSession:
     log_timestep: Callable[[int, BatchedRewards, BatchedDones], None]
     snapshot_model: Callable[[int], None]
 
-    def training(self):
+    def training(self, steps: int):
         obs = self.encode_obs(self.vec_env.reset())
 
-        for step in tqdm(range(self.config.train_steps)):
+        for step in tqdm(range(steps)):
             predictions = self.model(obs)
             actions = self.sample_actions(predictions)
             next_obs, rewards, dones, _ = self.vec_env.step(actions)
@@ -346,6 +348,34 @@ class VecEnvEpisodeStats:
             self.ep_rewards[envs_in_final_state] = 0.0
 
 
+class PPOAgent:
+    def __init__(self, config: PPOTrainingSettings):
+        self.config = config
+
+        tb_logger = TensorboardLogging()
+        model = PPOModel(config, tb_logger.log_training_loss, tb_logger.flush_losses)
+        exp_buffer = PPOVecEnvRolloutBuffer(config, model.train)
+        episode_logger = VecEnvEpisodeStats(config.n_envs, tb_logger.log_episode)
+
+        encode_obs = lambda x: x
+        sample_actions = lambda pred: \
+            [int(np.random.choice(config.num_actions, 1, p=prob_dist)) for prob_dist in pred[0]]
+
+        self.predict_action = lambda obs: model.predict(np.expand_dims(obs, axis=0))
+        self.train_session_factory = lambda env: VecEnvTrainingSession(
+            config, env, model.predict, encode_obs, sample_actions,
+            exp_buffer.append_step, episode_logger.log_step, model.save)
+
+    def act(self, obs: Any) -> Any:
+        prob_dist, _ = self.predict_action(obs)
+        prob_dist = np.squeeze(prob_dist)
+        return int(np.random.choice(self.config.num_actions, 1, p=prob_dist))
+
+    def train(self, env: gym.vector.VectorEnv, steps: int):
+        session = self.train_session_factory(env)
+        session.training(steps)
+
+
 def train_pong():
     # obs space: (210, 160, 3), uint8)
     # action space: Discrete(6)
@@ -365,7 +395,7 @@ def train_pong():
         config, vec_env, model.predict, encode_obs, sample_actions,
         exp_buffer.append_step, episode_logger.log_step, model.save)
 
-    session.training()
+    session.training(config.train_steps)
     model.save()
 
 
