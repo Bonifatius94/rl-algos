@@ -26,5 +26,5 @@ python3 algos/ppo.py
 
 ```sh
 docker-compose build && docker-compose run \
-    rlalgos-cuda python ./algos/ppo.py
+    rlalgos-cuda python ./train_headless.py
 ```

@@ -140,7 +140,7 @@ def _create_reward_model(settings: DreamerSettings) -> Model:
     dense_1 = Dense(64, "relu", name="rew1")
     dense_2 = Dense(64, "relu", name="rew2")
     reward = Dense(1, activation="linear", name="rew3")
-    terminal = Dense(2, name="rew4")
+    terminal = Dense(2, name="rew4") # TODO: figure out why this layer has no gradients
     st_categorical = STGradsOneHotCategorical(2)
     argmax = ArgmaxLayer()
 
@@ -206,7 +206,6 @@ class DreamerModel:
         h0 = Input(settings.hidden_dims, name="h0")
         z0 = Input(settings.repr_dims, name="z0")
 
-        # TODO: rename to "training_model", bake the loss into the last layers
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
         z1 = repr_model((s1_enc, h1))

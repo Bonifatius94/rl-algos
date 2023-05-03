@@ -19,11 +19,13 @@ def train_interactive():
     ui_env.render_output = display.next_frame
     render = lambda ep: play_episode(ui_env, render=True, max_steps=100)
 
-    ppo_config = PPOTrainingSettings(obs_shape=settings.repr_dims, num_actions=6)
+    ppo_config = PPOTrainingSettings(
+        obs_shape=settings.repr_dims, num_actions=6, n_envs=128)
     train_config = DreamerTrainSettings(
         n_envs=ppo_config.n_envs,
         steps_per_update=ppo_config.steps_per_update)
     ppo_agent = PPOAgent(ppo_config)
+
     train(train_config, env, ppo_agent, render)
 
 

@@ -22,11 +22,11 @@ class DreamerSettings:
 
 @dataclass
 class DreamerTrainSettings:
-    num_world_trajs: int=1 # 10
+    num_world_trajs: int=5
     dream_steps: int=16
     batch_size: int=64
     epochs: int=1000
-    world_epochs: int=2 # 10
+    world_epochs: int=100
     agent_epochs: int=5
     n_envs: int=32
     steps_per_update: int=512

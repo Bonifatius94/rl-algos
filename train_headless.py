@@ -3,7 +3,7 @@ import gym
 
 from algos.dreamer.config import DreamerSettings, DreamerTrainSettings
 from algos.dreamer.env import DreamerEnvWrapper
-from algos.dreamer.logging import record_episode
+# from algos.dreamer.logging import record_episode
 from algos.dreamer.training import train
 from algos.ppo import PPOTrainingSettings, PPOAgent
 
@@ -17,14 +17,16 @@ def train_headless():
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     env = DreamerEnvWrapper(orig_env, settings)
-    render = lambda ep: record_episode(env, os.path.join(VIDEOS_ROOTDIR, f"ep_{ep+1}.avi"))
+    # render = lambda ep: record_episode(env, os.path.join(VIDEOS_ROOTDIR, f"ep_{ep+1}.avi"))
 
-    ppo_config = PPOTrainingSettings(obs_shape=settings.repr_dims, num_actions=6)
+    ppo_config = PPOTrainingSettings(
+        obs_shape=settings.repr_dims, num_actions=6, n_envs=128)
     train_config = DreamerTrainSettings(
         n_envs=ppo_config.n_envs,
         steps_per_update=ppo_config.steps_per_update)
     ppo_agent = PPOAgent(ppo_config)
-    train(train_config, env, ppo_agent, render)
+
+    train(train_config, env, ppo_agent) #, render)
 
 
 if __name__ == "__main__":
