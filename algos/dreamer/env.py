@@ -34,14 +34,72 @@ def play_episode(
 
 
 @dataclass
+class DreamEnv(gym.Env):
+    model: DreamerModel
+    observation_space: gym.Space
+    action_space: gym.Space
+    fetch_initial_state: Callable[[], Any] = field(init=False)
+    h0: np.ndarray = field(init=False)
+    z0: np.ndarray = field(init=False)
+
+    def reset(self):
+        state = self.fetch_initial_state()
+        self.h0, self.z0 = self.model.bootstrap(self._batch(state))
+        return self.z0
+
+    def step(self, action):
+        (r1, term), h1, z1 = self.model.dream_model(
+            (self._batch(action), self.h0, self.z0))
+        self.h0, self.z0 = h1, z1
+        return z1, r1, term, None
+
+    def seed(self, seed: int):
+        self.model.seed(seed)
+
+    def _batch(self, arr: np.ndarray) -> np.ndarray:
+        return np.expand_dims(arr, axis=0)
+
+
+class DreamVecEnv(gym.vector.VectorEnv):
+    def __init__(
+            self, num_envs: int, obs_space: gym.Space, action_space: gym.Space,
+            model: DreamerModel, fetch_initial_state: Callable[[], Any]):
+        super(DreamVecEnv, self).__init__(num_envs, obs_space, action_space)
+        self.model = model
+        self.fetch_initial_state = fetch_initial_state
+        self.h0: np.ndarray = None
+        self.z0: np.ndarray = None
+
+    def reset(self):
+        state = np.array([self.fetch_initial_state() for _ in range(self.num_envs)])
+        self.h0, self.z0 = self.model.bootstrap(state)
+        return self.z0
+
+    def step(self, actions):
+        (r1, term), h1, z1 = self.model.dream_model(
+            (actions, self.h0, self.z0))
+        self.h0, self.z0 = h1, z1
+
+        done_envs, _ = np.where(term == 1)
+        if done_envs:
+            state = np.array([self.fetch_initial_state() for _ in range(len(done_envs))])
+            h_temp, z_temp = self.model.bootstrap(state)
+            self.h0[done_envs] = h_temp # TODO: check if indexing is correct
+            self.h0[done_envs] = z_temp # TODO: check if indexing is correct
+
+        return z1, r1, term, None
+
+    def seed(self, seed: int):
+        self.model.seed(seed)
+
+
+@dataclass
 class DreamerEnvWrapper(gym.Env):
     orig_env: gym.Env
     settings: DreamerSettings
     model: DreamerModel = field(default=None)
     render_output: RenderSubscriber = field(default=lambda frame_orig, frame_hall: None)
     collect_step: TrajectorySubscriber = field(default=lambda s1, z1, h1, a, r: None)
-    debug: bool = False
-    debug_scaling: float = 1.0
 
     action_space: gym.Space = field(init=False)
     observation_space: gym.Space = field(init=False)

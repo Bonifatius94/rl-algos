@@ -1,4 +1,3 @@
-from math import ceil
 from typing import List, Union
 import numpy as np
 
@@ -155,7 +154,7 @@ class DreamerModel:
     def __init__(self, settings: DreamerSettings):
         self.settings = settings
         self.optimizer = Adam()
-        self.env_model, self.bootstrap_model, \
+        self.env_model, self.dream_model, self.bootstrap_model, \
             self.step_model, self.render_model = \
                 DreamerModel._create_models(settings)
 
@@ -220,6 +219,15 @@ class DreamerModel:
             outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
             name="env_model")
 
+        h1 = history_model((a0, z0, h0))
+        z1_hat = trans_model(h1)
+        out = repr_out_model((z1_hat, h1))
+        r1_hat = reward_model(out)
+        dream_model = Model(
+            inputs=[a0, h0, z0],
+            outputs=[r1_hat, h1, z1_hat],
+            name="dream_model")
+
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
         z1 = repr_model((s1_enc, h1))
@@ -243,4 +251,4 @@ class DreamerModel:
             outputs=[s1_hat],
             name="render_model")
 
-        return env_model, bootstrap_model, step_model, render_model
+        return env_model, dream_model, bootstrap_model, step_model, render_model
