@@ -1,37 +1,29 @@
 import gym
 
-from algos.dreamer.config import DreamerSettings
+from algos.dreamer.config import DreamerSettings, DreamerTrainSettings
 from algos.dreamer.env import DreamerEnvWrapper, play_episode
-from algos.dreamer.dataset import sample_trajectory, generate_dataset
+from algos.dreamer.training import train
 from algos.dreamer.display import DreamerDebugDisplay
 from algos.dreamer.model import DreamerModel
+from algos.ppo import PPOAgent, PPOTrainingSettings
 
 
-def train_interactive(num_epochs: int, num_trajs: int, train_steps_per_epoch: int):
+def train_interactive():
     orig_env = gym.make("ALE/Pong-v5")
-    settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [64])
+    settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
+    train_config = DreamerTrainSettings()
     model = DreamerModel(settings)
     env = DreamerEnvWrapper(orig_env, settings, model=model)
 
-    ui_env = DreamerEnvWrapper(orig_env, settings, model=model, debug=True, debug_scaling=8)
+    ui_env = DreamerEnvWrapper(orig_env, settings, model=model)
     display = DreamerDebugDisplay(settings.obs_dims[1], settings.obs_dims[0], 8)
     ui_env.render_output = display.next_frame
+    render = lambda ep: play_episode(ui_env, render=True, max_steps=100)
 
-    actor = lambda x: env.action_space.sample()
-    trajs = [sample_trajectory(env, actor) for _ in range(num_trajs)]
-    dataset = generate_dataset(trajs)
-    dataset = dataset.batch(32).repeat().shuffle(100)
-    batch_iter = iter(dataset)
-
-    for ep in range(num_epochs):
-        print(f"starting epoch {ep+1}")
-
-        for _ in range(train_steps_per_epoch):
-            s1, z0, h0, a0, r1, t1 = batch_iter.next()
-            env.model.train(s1, z0, h0, a0, r1, t1)
-
-        play_episode(ui_env, render=True, max_steps=100)
+    ppo_config = PPOTrainingSettings(obs_shape=settings.repr_dims, num_actions=6)
+    ppo_agent = PPOAgent(ppo_config)
+    train(train_config, env, ppo_agent, render)
 
 
 if __name__ == "__main__":
-    train_interactive(1000, 3, 500)
+    train_interactive()
