@@ -273,6 +273,7 @@ class VecEnvTrainingSession:
     exps_consumer: Callable[[BatchedPredictions, BatchedSarsExps], None]
     log_timestep: Callable[[int, BatchedRewards, BatchedDones], None]
     snapshot_model: Callable[[int], None]
+    epoch: int=0
 
     def training(self, steps: int):
         obs = self.encode_obs(self.vec_env.reset())
@@ -284,10 +285,12 @@ class VecEnvTrainingSession:
             next_obs = self.encode_obs(next_obs)
             sars_exps = (obs, actions, rewards, next_obs, dones)
             self.exps_consumer(predictions, sars_exps)
-            self.log_timestep(step, rewards, dones)
+            self.log_timestep(steps * self.epoch + step, rewards, dones)
             obs = next_obs
             if (step + 1) % self.config.model_snapshot_interval == 0:
                 self.snapshot_model(step)
+
+        self.epoch += 1
 
 
 @dataclass
@@ -363,8 +366,8 @@ class PPOAgent:
                       for prob_dist in pred[0]]), axis=1)
 
         self.predict_action = lambda obs: model.predict(np.expand_dims(obs, axis=0))
-        self.train_session_factory = lambda env: VecEnvTrainingSession(
-            config, env, model.predict, encode_obs, sample_actions,
+        self.session =VecEnvTrainingSession(
+            config, None, model.predict, encode_obs, sample_actions,
             exp_buffer.append_step, episode_logger.log_step, model.save)
 
     def act(self, obs: Any) -> Any:
@@ -373,8 +376,8 @@ class PPOAgent:
         return int(np.random.choice(self.config.num_actions, 1, p=prob_dist))
 
     def train(self, env: gym.vector.VectorEnv, steps: int):
-        session = self.train_session_factory(env)
-        session.training(steps)
+        self.session.vec_env = env
+        self.session.training(steps)
 
 
 def train_pong():
