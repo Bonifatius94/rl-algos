@@ -13,7 +13,7 @@ from keras.layers import \
     Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
-from keras.losses import MSE, kullback_leibler_divergence
+from keras.losses import MSE, kullback_leibler_divergence as KLDiv
 
 from algos.dreamer.config import DreamerSettings
 
@@ -140,13 +140,12 @@ def _create_reward_model(settings: DreamerSettings) -> Model:
     dense_1 = Dense(64, "relu", name="rew1")
     dense_2 = Dense(64, "relu", name="rew2")
     reward = Dense(1, activation="linear", name="rew3")
-    terminal = Dense(2, name="rew4") # TODO: figure out why this layer has no gradients
-    st_categorical = STGradsOneHotCategorical(2)
-    argmax = ArgmaxLayer()
+    terminal = Dense(1, activation="sigmoid", name="rew4")
+    stop_grads = Lambda(lambda x: tf.stop_gradient(x))
 
-    prep = dense_2(dense_1(model_in))
+    prep = dense_2(dense_1(stop_grads(model_in)))
     reward_out = reward(prep)
-    terminal_out = argmax(st_categorical(terminal(prep)))
+    terminal_out = terminal(prep)
     return Model(inputs=model_in, outputs=[reward_out, terminal_out], name="reward_model")
 
 
@@ -176,20 +175,20 @@ class DreamerModel:
 
     @tf.function
     def train(self, s1, z0, h0, a0, r1, t1):
-        BETA = 0.1
+        ALPHA = 0.8
 
         with tf.GradientTape() as tape:
             z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
-            reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
-            term_loss = MSE(t1, term_hat)
-            repr_loss = BETA * tf.reduce_mean(kullback_leibler_divergence(z1, z1_hat))
+            repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
+                + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
+            reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
+            term_loss = tf.reduce_mean(MSE(t1, term_hat))
+            loss = obs_loss + repr_loss + reward_loss + term_loss
 
-            loss = reward_loss + obs_loss + term_loss + repr_loss
-
-        grads = tape.gradient(loss, self.env_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+            grads = tape.gradient(loss, self.env_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
 
     @staticmethod
     def _create_models(settings: DreamerSettings):

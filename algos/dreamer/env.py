@@ -51,6 +51,7 @@ class DreamEnv(gym.Env):
         (r1, term), h1, z1 = self.model.dream_model(
             (self._batch(action), self.h0, self.z0))
         self.h0, self.z0 = h1, z1
+        term = np.round(term)
         return z1, r1, term, None
 
     def seed(self, seed: int):
@@ -81,6 +82,7 @@ class DreamVecEnv(gym.vector.VectorEnv):
         (r1, term), h1, z1 = self.model.dream_model((actions, self.h0, self.z0))
         self.h0, self.z0 = h1.numpy(), z1.numpy()
         r1, term = np.squeeze(r1), np.squeeze(term.numpy())
+        term = np.round(term)
 
         done_envs = np.where(term)[0]
         num_dones = done_envs.shape[0]
