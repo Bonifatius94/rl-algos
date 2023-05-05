@@ -13,13 +13,21 @@ cd rl-algos
 ```
 
 ### Local Deployment
-
 ```sh
-python3 -m pip install -r requirements.txt
+python3 -m pip install virtualenv
+virtualenv venv --python=python3
+
+source venv/bin/activate
+
+pip install -r build_requirements.txt
+pip install -r runtime_requirements.txt
+
+deactivate
 ```
 
+### Run Training With Visualization
 ```sh
-python3 algos/ppo.py
+python3 algos/train_interactive.py
 ```
 
 ### Docker Deployment
