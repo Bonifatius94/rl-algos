@@ -240,7 +240,7 @@ class DreamerModel:
     def __init__(
             self, settings: DreamerSettings,
             model_comps: DreamerModelComponents=None,
-            loss_logger: Callable[[float, float, float, float]]=lambda l1, l2, l3, l4: None):
+            loss_logger: Callable[[float, float, float, float], None]=lambda l1, l2, l3, l4: None):
         self.settings = settings
         model_comps = model_comps if model_comps else DreamerModelComponents(settings)
         self.loss_logger = loss_logger

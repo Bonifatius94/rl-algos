@@ -7,6 +7,7 @@ from tqdm import tqdm
 from algos.dreamer.config import DreamerTrainSettings
 from algos.dreamer.env import DreamerEnvWrapper, DreamVecEnv
 from algos.dreamer.dataset import sample_trajectory, concat_datasets
+from algos.dreamer.logging import DreamerTensorboardLogger
 
 
 class TrainableAgent(Protocol):
@@ -21,6 +22,7 @@ def train(
         config: DreamerTrainSettings,
         env: DreamerEnvWrapper,
         agent: TrainableAgent,
+        tb_logger: DreamerTensorboardLogger,
         on_end_of_episode: Callable[[int], None] = lambda ep: None):
     rand_actor = lambda x: env.action_space.sample()
 
@@ -37,11 +39,12 @@ def train(
         dataset = concat_datasets(trajs)
         shuffled_world_data = dataset.shuffle(100).batch(config.batch_size)
 
-        # TODO: add loss logging to world model training
         print("update world model")
-        for _ in tqdm(range(config.world_epochs)):
+        for i in tqdm(range(config.world_epochs)):
             for s1, z0, h0, a0, r1, t1 in iter(shuffled_world_data):
                 env.model.train(s1, z0, h0, a0, r1, t1)
+            log_step = ep * config.world_epochs + i
+            tb_logger.flush_losses(log_step)
 
         initial_states = shuffled_world_data.unbatch().repeat().map(lambda s1, z0, h0, a0, r1, t1: (s1))
         initial_states_iter = iter(initial_states)
