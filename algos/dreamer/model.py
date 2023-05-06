@@ -149,61 +149,52 @@ def _create_reward_model(settings: DreamerSettings) -> Model:
     return Model(inputs=model_in, outputs=[reward_out, terminal_out], name="reward_model")
 
 
-class DreamerModel:
+class DreamerModelComponents:
     def __init__(self, settings: DreamerSettings):
         self.settings = settings
-        self.optimizer = Adam()
-        self.env_model, self.dream_model, self.bootstrap_model, \
-            self.step_model, self.render_model = \
-                DreamerModel._create_models(settings)
+        self.history_model = _create_history_model(settings)
+        self.trans_model = _create_transition_model(settings)
+        self.repr_model = _create_representation_model(settings)
+        self.repr_out_model = _create_repr_output_model(settings)
+        self.encoder_model = _create_state_encoder_model(settings)
+        self.decoder_model = _create_state_decoder_model(settings)
+        self.reward_model = _create_reward_model(settings)
 
-    def seed(self, seed: int):
-        tf.random.set_seed(seed)
+    def save_weights(self, directory: str):
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+        self.history_model.save_weights(os.path.join(directory, f"history_model.h5"))
+        self.trans_model.save_weights(os.path.join(directory, f"trans_model.h5"))
+        self.repr_model.save_weights(os.path.join(directory, f"repr_model.h5"))
+        self.repr_out_model.save_weights(os.path.join(directory, f"repr_out_model.h5"))
+        self.encoder_model.save_weights(os.path.join(directory, f"encoder_model.h5"))
+        self.decoder_model.save_weights(os.path.join(directory, f"decoder_model.h5"))
+        self.reward_model.save_weights(os.path.join(directory, f"reward_model.h5"))
 
-    def summary(self):
-        self.env_model.summary()
-        self.step_model.summary()
-        self.render_model.summary()
+    def load_weights(self, directory: str):
+        if not os.path.exists(directory):
+            raise FileNotFoundError(f"The specified directory '{directory}' does not exist!")
+        self.history_model.load_weights(os.path.join(directory, f"history_model.h5"))
+        self.trans_model.load_weights(os.path.join(directory, f"trans_model.h5"))
+        self.repr_model.load_weights(os.path.join(directory, f"repr_model.h5"))
+        self.repr_out_model.load_weights(os.path.join(directory, f"repr_out_model.h5"))
+        self.encoder_model.load_weights(os.path.join(directory, f"encoder_model.h5"))
+        self.decoder_model.load_weights(os.path.join(directory, f"decoder_model.h5"))
+        self.reward_model.load_weights(os.path.join(directory, f"reward_model.h5"))
 
-    def bootstrap(self, initial_state: np.ndarray):
-        batch_size = initial_state.shape[0]
-        a_in = tf.zeros([batch_size] + self.settings.action_dims)
-        h_in = tf.zeros([batch_size] + self.settings.hidden_dims)
-        z_in = tf.zeros([batch_size] + self.settings.repr_dims)
-        h0, z0 = self.bootstrap_model((initial_state, a_in, h_in, z_in))
-        return h0, z0
+    def compose_models(self):
+        s1 = Input(self.settings.obs_dims, name="s1")
+        a0 = Input(self.settings.action_dims, name="a0")
+        h0 = Input(self.settings.hidden_dims, name="h0")
+        z0 = Input(self.settings.repr_dims, name="z0")
 
-    @tf.function
-    def train(self, s1, z0, h0, a0, r1, t1):
-        ALPHA = 0.8
-
-        with tf.GradientTape() as tape:
-            z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
-
-            obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
-            repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
-                + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
-            reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
-            term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = obs_loss + repr_loss + reward_loss + term_loss
-
-            grads = tape.gradient(loss, self.env_model.trainable_variables)
-            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
-
-    @staticmethod
-    def _create_models(settings: DreamerSettings):
-        history_model = _create_history_model(settings)
-        trans_model = _create_transition_model(settings)
-        repr_model = _create_representation_model(settings)
-        repr_out_model = _create_repr_output_model(settings)
-        encoder_model = _create_state_encoder_model(settings)
-        decoder_model = _create_state_decoder_model(settings)
-        reward_model = _create_reward_model(settings)
-
-        s1 = Input(settings.obs_dims, name="s1")
-        a0 = Input(settings.action_dims, name="a0")
-        h0 = Input(settings.hidden_dims, name="h0")
-        z0 = Input(settings.repr_dims, name="z0")
+        history_model = self.history_model
+        trans_model = self.trans_model
+        repr_model = self.repr_model
+        repr_out_model = self.repr_out_model
+        encoder_model = self.encoder_model
+        decoder_model = self.decoder_model
+        reward_model = self.reward_model
 
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
@@ -229,14 +220,6 @@ class DreamerModel:
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, z0, h0))
         z1 = repr_model((s1_enc, h1))
-        bootstrap_model = Model(
-            inputs=[s1, a0, h0, z0],
-            outputs=[h1, z1],
-            name="bootstrap_model")
-
-        s1_enc = encoder_model(s1)
-        h1 = history_model((a0, z0, h0))
-        z1 = repr_model((s1_enc, h1))
         step_model = Model(
             inputs=[s1, a0, h0, z0],
             outputs=[h1, z1],
@@ -249,4 +232,49 @@ class DreamerModel:
             outputs=[s1_hat],
             name="render_model")
 
-        return env_model, dream_model, bootstrap_model, step_model, render_model
+        return env_model, dream_model, step_model, render_model
+
+
+class DreamerModel:
+    def __init__(
+            self, settings: DreamerSettings,
+            model_comps: DreamerModelComponents=None):
+        self.settings = settings
+        model_comps = model_comps if model_comps else DreamerModelComponents(settings)
+        self.optimizer = Adam()
+        self.env_model, self.dream_model, self.step_model, self.render_model = \
+            model_comps.compose_models()
+
+    def seed(self, seed: int):
+        tf.random.set_seed(seed)
+
+    def summary(self):
+        self.env_model.summary()
+        self.dream_model.summary()
+        self.step_model.summary()
+        self.render_model.summary()
+
+    def bootstrap(self, initial_state: np.ndarray):
+        batch_size = initial_state.shape[0]
+        a_in = tf.zeros([batch_size] + self.settings.action_dims)
+        h_in = tf.zeros([batch_size] + self.settings.hidden_dims)
+        z_in = tf.zeros([batch_size] + self.settings.repr_dims)
+        h0, z0 = self.step_model((initial_state, a_in, h_in, z_in))
+        return h0, z0
+
+    @tf.function
+    def train(self, s1, z0, h0, a0, r1, t1):
+        ALPHA = 0.8
+
+        with tf.GradientTape() as tape:
+            z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
+
+            obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
+            repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
+                + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
+            reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
+            term_loss = tf.reduce_mean(MSE(t1, term_hat))
+            loss = obs_loss + repr_loss + reward_loss + term_loss
+
+            grads = tape.gradient(loss, self.env_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
