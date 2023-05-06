@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Callable
 import numpy as np
 
 # info: disable verbose tensorflow logging
@@ -14,6 +14,7 @@ from keras.layers import \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
 from keras.losses import MSE, kullback_leibler_divergence as KLDiv
+from keras.metrics import Mean
 
 from algos.dreamer.config import DreamerSettings
 
@@ -153,10 +154,10 @@ class DreamerModelComponents:
     def __init__(self, settings: DreamerSettings):
         self.settings = settings
         self.history_model = _create_history_model(settings)
-        self.trans_model = _create_transition_model(settings)
-        self.repr_model = _create_representation_model(settings)
-        self.repr_out_model = _create_repr_output_model(settings)
         self.encoder_model = _create_state_encoder_model(settings)
+        self.repr_model = _create_representation_model(settings)
+        self.trans_model = _create_transition_model(settings)
+        self.repr_out_model = _create_repr_output_model(settings)
         self.decoder_model = _create_state_decoder_model(settings)
         self.reward_model = _create_reward_model(settings)
 
@@ -238,9 +239,11 @@ class DreamerModelComponents:
 class DreamerModel:
     def __init__(
             self, settings: DreamerSettings,
-            model_comps: DreamerModelComponents=None):
+            model_comps: DreamerModelComponents=None,
+            loss_logger: Callable[[float, float, float, float]]=lambda l1, l2, l3, l4: None):
         self.settings = settings
         model_comps = model_comps if model_comps else DreamerModelComponents(settings)
+        self.loss_logger = loss_logger
         self.optimizer = Adam()
         self.env_model, self.dream_model, self.step_model, self.render_model = \
             model_comps.compose_models()
@@ -278,3 +281,4 @@ class DreamerModel:
 
             grads = tape.gradient(loss, self.env_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+            self.loss_logger(obs_loss, repr_loss, reward_loss, term_loss)
