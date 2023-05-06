@@ -242,14 +242,17 @@ class DreamerModel:
             model_comps: DreamerModelComponents=None,
             loss_logger: Callable[[float, float, float, float], None]=lambda l1, l2, l3, l4: None):
         self.settings = settings
-        model_comps = model_comps if model_comps else DreamerModelComponents(settings)
+        self.model_comps = model_comps if model_comps else DreamerModelComponents(settings)
         self.loss_logger = loss_logger
         self.optimizer = Adam()
         self.env_model, self.dream_model, self.step_model, self.render_model = \
-            model_comps.compose_models()
+            self.model_comps.compose_models()
 
     def seed(self, seed: int):
         tf.random.set_seed(seed)
+
+    def save(self, directory: str):
+        self.model_comps.save_weights(directory)
 
     def summary(self):
         self.env_model.summary()

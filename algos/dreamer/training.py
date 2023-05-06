@@ -17,6 +17,9 @@ class TrainableAgent(Protocol):
     def train(self, env: gym.vector.VectorEnv, steps: int):
         raise NotImplementedError()
 
+    def save(self, directory: str):
+        raise NotImplementedError()
+
 
 def train(
         config: DreamerTrainSettings,
@@ -56,5 +59,13 @@ def train(
         print("update agent")
         agent.train(agent_env, config.agent_timesteps)
 
+        if (ep + 1) % config.save_model_interval == 0:
+            print("snapshot models")
+            agent.save(f"model/agent_{ep}")
+            env.model.save(f"model/dreamer_{ep}")
+
         on_end_of_episode(ep)
         gc.collect()
+
+    agent.save(f"model/agent_final")
+    env.model.save("model/dreamer_final")

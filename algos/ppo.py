@@ -1,3 +1,4 @@
+import os
 from typing import Any, Callable, Tuple, List, Union, Iterator
 from dataclasses import dataclass, field
 
@@ -175,9 +176,11 @@ class PPOModel:
         return states[ids], actions[ids], returns[ids], \
             advantages[ids], prob_dists_old[ids], baselines_old[ids]
 
-    def save(self, step: Union[int, None] = None):
-        model_file = f"model/ppo_model_{step}.h5" if step else f"model/ppo_model_final.h5"
-        self.model.save_weights(model_file, overwrite=True)
+    def save(self, directory: str):
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+        file_path = os.path.join(directory, "ppo_model.h5")
+        self.model.save_weights(file_path)
 
 
 @dataclass
@@ -294,15 +297,14 @@ class VecEnvTrainingSession:
 
 
 @dataclass
-class TensorboardLogging:
+class PPOTensorboardLogging:
     step: int = 0
     policy_loss: Metric = Mean()
     value_loss: Metric = Mean()
     entropy_loss: Metric = Mean()
 
     def __post_init__(self):
-        train_log_dir = 'logs/train'
-        # TODO: add some timestamp to avoid overwriting previous training logs
+        train_log_dir = 'logs/ppo'
         self.summary_writer = tf.summary.create_file_writer(train_log_dir)
 
     def log_training_loss(self, policy_loss: float, value_loss: float, entropy_loss: float):
@@ -355,9 +357,9 @@ class PPOAgent:
     def __init__(self, config: PPOTrainingSettings):
         self.config = config
 
-        tb_logger = TensorboardLogging()
-        model = PPOModel(config, tb_logger.log_training_loss, tb_logger.flush_losses)
-        exp_buffer = PPOVecEnvRolloutBuffer(config, model.train)
+        tb_logger = PPOTensorboardLogging()
+        self.model = PPOModel(config, tb_logger.log_training_loss, tb_logger.flush_losses)
+        exp_buffer = PPOVecEnvRolloutBuffer(config, self.model.train)
         episode_logger = VecEnvEpisodeStats(config.n_envs, tb_logger.log_episode)
 
         encode_obs = lambda x: x
@@ -365,10 +367,10 @@ class PPOAgent:
             np.expand_dims(np.array([int(np.random.choice(config.num_actions, 1, p=prob_dist))
                       for prob_dist in pred[0]]), axis=1)
 
-        self.predict_action = lambda obs: model.predict(np.expand_dims(obs, axis=0))
-        self.session =VecEnvTrainingSession(
-            config, None, model.predict, encode_obs, sample_actions,
-            exp_buffer.append_step, episode_logger.log_step, model.save)
+        self.predict_action = lambda obs: self.model.predict(np.expand_dims(obs, axis=0))
+        self.session = VecEnvTrainingSession(
+            config, None, self.model.predict, encode_obs, sample_actions,
+            exp_buffer.append_step, episode_logger.log_step, lambda ep: None)
 
     def act(self, obs: Any) -> Any:
         prob_dist, _ = self.predict_action(obs)
@@ -379,6 +381,9 @@ class PPOAgent:
         self.session.vec_env = env
         self.session.training(steps)
 
+    def save(self, directory: str):
+        self.model.save(directory)
+
 
 def train_pong():
     # obs space: (210, 160, 3), uint8)
@@ -387,7 +392,7 @@ def train_pong():
     make_env = lambda: gym.make("ALE/Pong-v5")
     vec_env = gym.vector.AsyncVectorEnv([make_env for _ in range(config.n_envs)])
 
-    tb_logger = TensorboardLogging()
+    tb_logger = PPOTensorboardLogging()
     model = PPOModel(config, tb_logger.log_training_loss, tb_logger.flush_losses)
     exp_buffer = PPOVecEnvRolloutBuffer(config, model.train)
     episode_logger = VecEnvEpisodeStats(config.n_envs, tb_logger.log_episode)
@@ -395,12 +400,13 @@ def train_pong():
     sample_actions = lambda pred: \
         [int(np.random.choice(config.num_actions, 1, p=prob_dist)) for prob_dist in pred[0]]
     encode_obs = lambda obs: obs / 127.5 - 1.0
+    snapshot_model = lambda step: model.save(f"model/ppo_{step}")
     session = VecEnvTrainingSession(
         config, vec_env, model.predict, encode_obs, sample_actions,
-        exp_buffer.append_step, episode_logger.log_step, model.save)
+        exp_buffer.append_step, episode_logger.log_step, snapshot_model)
 
     session.training(config.train_steps)
-    model.save()
+    model.save("model/ppo_final")
 
 
 if __name__ == '__main__':

@@ -30,6 +30,7 @@ class DreamerTrainSettings:
     agent_epochs: int=5
     n_envs: int=32
     steps_per_update: int=512
+    save_model_interval: int=5
 
     @property
     def agent_timesteps(self) -> int:

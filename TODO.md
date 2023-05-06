@@ -3,6 +3,7 @@
 - [x] loss logging
 - [ ] agent performance (eval against real env)
 - [x] sample images
+- [ ] log the representation states
 
 ### Fix Model
 - [x] fix terminal loss grads
@@ -10,10 +11,10 @@
 
 ### Support various Gym Envs
 - [ ] sample on continuous action spaces (not only discrete)
-- [ ] support inputs other than images (make encoder exchangeable)
+- [ ] support inputs other than images (make encoder/decoder exchangeable)
 
 ### Backup Model
-- [ ] add model snapshots during training
+- [x] add model snapshots during training
 - [ ] ~~union agent + dream encoder as inference agent acting on real data~~
 
 ### Optimize Performance
