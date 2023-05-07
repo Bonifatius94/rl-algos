@@ -21,6 +21,10 @@
 - [ ] vectorize real env for collecting trajectories
 - [ ] track down memory leak
 
+### Add Tests + Linter
+- [ ] add more tests, at least for most important use cases
+- [ ] add linter (pylint), add feasible warning ignore list
+
 ### Add Docs
 - [ ] explain dreamer architecture (how the model works)
 - [x] write idiot-proof installation for windows / linux

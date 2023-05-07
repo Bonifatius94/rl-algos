@@ -38,7 +38,7 @@ class DreamEnv(gym.Env):
     model: DreamerModel
     observation_space: gym.Space
     action_space: gym.Space
-    fetch_initial_state: Callable[[], Any] = field(init=False)
+    fetch_initial_state: Callable[[], Any] = None
     h0: np.ndarray = field(init=False)
     z0: np.ndarray = field(init=False)
 
