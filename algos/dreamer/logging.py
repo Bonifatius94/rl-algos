@@ -16,7 +16,6 @@ class DreamerTensorboardLogger:
 
     def __post_init__(self):
         train_log_dir = "logs/dreamer"
-        # TODO: add some timestamp to avoid overwriting previous training logs
         self.summary_writer = tf.summary.create_file_writer(train_log_dir)
 
     def log_loss(self, obs_loss, repr_loss, reward_loss, term_loss):

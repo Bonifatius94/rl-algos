@@ -15,6 +15,8 @@ def sample_trajectory(
     traj_actions = []
     traj_rewards = []
 
+    # TODO: extend this to use a vector environment for efficiency
+
     def append_timestep(s1, z1, h1, a, r):
         traj_zs.append(z1)
         traj_hs.append(np.squeeze(h1))

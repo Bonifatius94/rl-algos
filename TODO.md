@@ -8,6 +8,7 @@
 ### Fix Model
 - [x] fix terminal loss grads
 - [ ] implement prob dist sampling inside model layers
+- [ ] refine model layers to reproduce results from Hafner et. al
 
 ### Support various Gym Envs
 - [ ] sample on continuous action spaces (not only discrete)
