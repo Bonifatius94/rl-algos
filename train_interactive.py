@@ -6,7 +6,9 @@ from algos.dreamer.training import train
 from algos.dreamer.display import DreamerDebugDisplay
 from algos.dreamer.model import DreamerModel
 from algos.dreamer.logging import DreamerTensorboardLogger
-from algos.ppo import PPOAgent, PPOTrainingSettings
+
+from algos.ppo.config import PPOTrainingSettings
+from algos.ppo.agent import PPOAgent
 
 
 def train_interactive():

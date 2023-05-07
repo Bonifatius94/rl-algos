@@ -163,7 +163,7 @@ class DreamerModelComponents:
 
     def save_weights(self, directory: str):
         if not os.path.exists(directory):
-            os.mkdir(directory)
+            os.makedirs(directory)
         self.history_model.save_weights(os.path.join(directory, f"history_model.h5"))
         self.trans_model.save_weights(os.path.join(directory, f"trans_model.h5"))
         self.repr_model.save_weights(os.path.join(directory, f"repr_model.h5"))

@@ -1,22 +1,17 @@
-import os
-import gym
 from time import time
+import gym
 
 from algos.dreamer.config import DreamerSettings, DreamerTrainSettings
 from algos.dreamer.env import DreamerEnvWrapper, play_episode
 from algos.dreamer.model import DreamerModel
 from algos.dreamer.logging import DreamerTensorboardLogger
-# from algos.dreamer.logging import record_episode
 from algos.dreamer.training import train
-from algos.ppo import PPOTrainingSettings, PPOAgent
+
+from algos.ppo.config import PPOTrainingSettings
+from algos.ppo.agent import PPOAgent
 
 
 def train_headless():
-    VIDEOS_ROOTDIR = "./videos"
-    if os.path.exists(VIDEOS_ROOTDIR):
-        os.system(f"rm -rf {VIDEOS_ROOTDIR}")
-    os.mkdir(VIDEOS_ROOTDIR)
-
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     tb_logger = DreamerTensorboardLogger()
