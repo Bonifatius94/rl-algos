@@ -56,7 +56,7 @@ def _create_history_model(settings: DreamerSettings) -> Model:
 
     gru_in = dense_in(concat_in([flatten_repr(z0_in), a0_in]))
     _, h1_out = rnn(expand_timeseries(gru_in), initial_state=h0_in)
-    return Model(inputs=[a0_in, z0_in, h0_in], outputs=h1_out, name="history_model")
+    return Model(inputs=[a0_in, h0_in, z0_in], outputs=h1_out, name="history_model")
 
 
 def _create_transition_model(settings: DreamerSettings) -> Model:
@@ -85,12 +85,12 @@ def _create_representation_model(settings: DreamerSettings) -> Model:
 def _create_repr_output_model(settings: DreamerSettings) -> Model:
     # fuses representation and hidden state
     # input of decoder and reward prediction
-    repr_in = Input(settings.repr_dims, name="z1")
+    z_in = Input(settings.repr_dims, name="z1")
     h_in = Input(settings.hidden_dims, name="h1")
     concat = Concatenate()
     flatten = Flatten()
-    model_out = concat([flatten(repr_in), h_in])
-    return Model(inputs=[repr_in, h_in], outputs=model_out, name="repr_output_model")
+    model_out = concat([flatten(z_in), h_in])
+    return Model(inputs=[h_in, z_in], outputs=model_out, name="repr_output_model")
 
 
 def _create_state_encoder_model(settings: DreamerSettings) -> Model:
@@ -198,10 +198,10 @@ class DreamerModelComponents:
         reward_model = self.reward_model
 
         s1_enc = encoder_model(s1)
-        h1 = history_model((a0, z0, h0))
+        h1 = history_model((a0, h0, z0))
         z1 = repr_model((s1_enc, h1))
         z1_hat = trans_model(h1)
-        out = repr_out_model((z1, h1))
+        out = repr_out_model((h1, z1))
         r1_hat = reward_model(out)
         s1_hat = decoder_model(out)
         env_model = Model(
@@ -209,9 +209,9 @@ class DreamerModelComponents:
             outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
             name="env_model")
 
-        h1 = history_model((a0, z0, h0))
+        h1 = history_model((a0, h0, z0))
         z1_hat = trans_model(h1)
-        out = repr_out_model((z1_hat, h1))
+        out = repr_out_model((h1, z1_hat))
         r1_hat = reward_model(out)
         dream_model = Model(
             inputs=[a0, h0, z0],
@@ -219,17 +219,17 @@ class DreamerModelComponents:
             name="dream_model")
 
         s1_enc = encoder_model(s1)
-        h1 = history_model((a0, z0, h0))
+        h1 = history_model((a0, h0, z0))
         z1 = repr_model((s1_enc, h1))
         step_model = Model(
             inputs=[s1, a0, h0, z0],
             outputs=[h1, z1],
             name="step_model")
 
-        out = repr_out_model((z0, h0))
+        out = repr_out_model((h0, z0))
         s1_hat = decoder_model(out)
         render_model = Model(
-            inputs=[z0, h0],
+            inputs=[h0, z0],
             outputs=[s1_hat],
             name="render_model")
 
@@ -254,6 +254,9 @@ class DreamerModel:
     def save(self, directory: str):
         self.model_comps.save_weights(directory)
 
+    def load(self, directory: str):
+        self.model_comps.load_weights(directory)
+
     def summary(self):
         self.env_model.summary()
         self.dream_model.summary()
@@ -265,8 +268,16 @@ class DreamerModel:
         a_in = tf.zeros([batch_size] + self.settings.action_dims)
         h_in = tf.zeros([batch_size] + self.settings.hidden_dims)
         z_in = tf.zeros([batch_size] + self.settings.repr_dims)
-        h0, z0 = self.step_model((initial_state, a_in, h_in, z_in))
-        return h0, z0
+        return self.step(initial_state, a_in, h_in, z_in)
+
+    def step(self, s0, a0, h, z):
+        return self.step_model((s0, a0, h, z))
+
+    def dream_step(self, a, h, z):
+        return self.dream_model((a, h, z))
+
+    def render(self, h, z):
+        return self.render_model((h, z))
 
     @tf.function
     def train(self, s1, z0, h0, a0, r1, t1):

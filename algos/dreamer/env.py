@@ -48,8 +48,8 @@ class DreamEnv(gym.Env):
         return self.z0
 
     def step(self, action):
-        (r1, term), h1, z1 = self.model.dream_model(
-            (self._batch(action), self.h0, self.z0))
+        (r1, term), h1, z1 = self.model.dream_step(
+            self._batch(action), self.h0, self.z0)
         self.h0, self.z0 = h1, z1
         term = np.round(term)
         return z1, r1, term, None
@@ -79,7 +79,7 @@ class DreamVecEnv(gym.vector.VectorEnv):
         return self.z0
 
     def step(self, actions):
-        (r1, term), h1, z1 = self.model.dream_model((actions, self.h0, self.z0))
+        (r1, term), h1, z1 = self.model.dream_step(actions, self.h0, self.z0)
         self.h0, self.z0 = h1.numpy(), z1.numpy()
         r1, term = np.squeeze(r1), np.squeeze(term.numpy())
         term = np.round(term)
@@ -132,14 +132,14 @@ class DreamerEnvWrapper(gym.Env):
     def step(self, action):
         state, reward, done, meta = self.orig_env.step(action)
         state = self._resize_image(state)
-        inputs = (self._batch(state), self._batch(action), self.h0, self.z0)
-        self.h0, self.z0 = self.model.step_model(inputs)
+        self.h0, self.z0 = self.model.step(
+            self._batch(state), self._batch(action), self.h0, self.z0)
         self.frame_orig, repr = state, self._unbatch(self.z0)
         self.collect_step(state, repr, self.h0, action, reward)
         return repr, reward, done, meta
 
     def render(self, mode="human"):
-        frame_hall = self.model.render_model((self.z0, self.h0))
+        frame_hall = self.model.render(self.h0, self.z0)
         self.render_output(self.frame_orig, self._unbatch(frame_hall))
 
     def seed(self, seed: int):
