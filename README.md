@@ -27,7 +27,7 @@ deactivate
 
 ### Run Training With Visualization
 ```sh
-python3 algos/train_interactive.py
+python3 train_interactive.py
 ```
 
 ### Docker Deployment
