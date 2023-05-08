@@ -23,10 +23,8 @@ def test_can_collect_sars_experiences_with_wrapper_env():
     orig_env = gym.make("ALE/Pong-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
 
-    def assert_collect_step_has_correct_shapes(s1, z1, h1, a, r):
-        assert shape_of(z1, settings.repr_dims)
+    def assert_collect_step_has_correct_shapes(s1, a, r):
         assert shape_of(s1, settings.obs_dims)
-        assert shape_of(h1, [1] + settings.hidden_dims)
         assert shape_of(np.array(a), [1])
         assert shape_of(np.array(r), [1])
 
@@ -53,7 +51,9 @@ def test_can_play_episode_with_simple_dream_env():
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     wrapper_env = DreamerEnvWrapper(orig_env, settings)
 
-    init_state_provider = lambda: np.zeros(settings.obs_dims)
+    init_state_provider = lambda: (
+        np.zeros([5] + settings.obs_dims),
+        np.zeros([4] + settings.action_dims))
     dream_env = DreamEnv(
         wrapper_env.model, wrapper_env.observation_space,
         wrapper_env.action_space, init_state_provider)
@@ -66,9 +66,12 @@ def test_can_step_with_vectorized_dream_env():
     wrapper_env = DreamerEnvWrapper(orig_env, settings)
 
     n_envs = 64
+    init_state_provider = lambda: (
+        np.zeros([5] + settings.obs_dims),
+        np.zeros([4] + settings.action_dims))
     vec_dream_env = DreamVecEnv(
         n_envs, wrapper_env.observation_space, wrapper_env.action_space,
-        wrapper_env.model, lambda: np.zeros(settings.obs_dims))
+        wrapper_env.model, init_state_provider)
 
     def play_episode_vecenv(env: gym.vector.VectorEnv):
         env.reset()

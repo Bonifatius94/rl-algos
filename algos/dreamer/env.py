@@ -10,8 +10,7 @@ from algos.dreamer.model import DreamerModel
 
 
 RenderSubscriber = Callable[[np.ndarray, np.ndarray], None]
-TrajectorySubscriber = Callable[[np.ndarray, np.ndarray, np.ndarray,
-                                 np.ndarray, np.ndarray], None]
+TrajectorySubscriber = Callable[[np.ndarray, np.ndarray, np.ndarray], None]
 
 
 def play_episode(
@@ -43,22 +42,27 @@ class DreamEnv(gym.Env):
     z0: np.ndarray = field(init=False)
 
     def reset(self):
-        state = self.fetch_initial_state()
-        self.h0, self.z0 = self.model.bootstrap(self._batch(state))
-        return self.z0
+        s0_init, a0_init = self.fetch_initial_state()
+        h0, z0 = self.model.dream_bootstrap(
+            self._batch(s0_init), self._batch(a0_init))
+        self.h0, self.z0 = h0.numpy(), z0.numpy()
+        return self._unbatch(self.z0)
 
     def step(self, action):
         (r1, term), h1, z1 = self.model.dream_step(
             self._batch(action), self.h0, self.z0)
         self.h0, self.z0 = h1, z1
         term = np.round(term)
-        return z1, r1, term, None
+        return self._unbatch(z1), self._unbatch(r1), self._unbatch(term), None
 
     def seed(self, seed: int):
         self.model.seed(seed)
 
     def _batch(self, arr: np.ndarray) -> np.ndarray:
         return np.expand_dims(arr, axis=0)
+
+    def _unbatch(self, arr: np.ndarray) -> np.ndarray:
+        return np.squeeze(arr, axis=0)
 
 
 class DreamVecEnv(gym.vector.VectorEnv):
@@ -73,8 +77,7 @@ class DreamVecEnv(gym.vector.VectorEnv):
         self.closed = True
 
     def reset(self):
-        state = np.array([self.fetch_initial_state() for _ in range(self.num_envs)])
-        h0, z0 = self.model.bootstrap(state)
+        h0, z0 = self._bootstrap(self.num_envs)
         self.h0, self.z0 = h0.numpy(), z0.numpy()
         return self.z0
 
@@ -87,8 +90,7 @@ class DreamVecEnv(gym.vector.VectorEnv):
         done_envs = np.where(term)[0]
         num_dones = done_envs.shape[0]
         if num_dones > 0:
-            state = np.array([self.fetch_initial_state() for _ in range(len(done_envs))])
-            h_temp, z_temp = self.model.bootstrap(state)
+            h_temp, z_temp = self._bootstrap(num_dones)
             self.h0[done_envs] = h_temp
             self.z0[done_envs] = z_temp
 
@@ -97,6 +99,12 @@ class DreamVecEnv(gym.vector.VectorEnv):
     def seed(self, seed: int):
         self.model.seed(seed)
 
+    def _bootstrap(self, batch_size: int):
+        init_data = [self.fetch_initial_state() for _ in range(batch_size)]
+        s0_init = np.array([s for (s, a) in init_data])
+        a0_init = np.array([a for (s, a) in init_data])
+        return self.model.dream_bootstrap(s0_init, a0_init)
+
 
 @dataclass
 class DreamerEnvWrapper(gym.Env):
@@ -104,7 +112,8 @@ class DreamerEnvWrapper(gym.Env):
     settings: DreamerSettings
     model: DreamerModel = field(default=None)
     render_output: RenderSubscriber = field(default=lambda frame_orig, frame_hall: None)
-    collect_step: TrajectorySubscriber = field(default=lambda s1, z1, h1, a, r: None)
+    collect_step: TrajectorySubscriber = field(default=lambda s1, a0, r1: None)
+    # TODO: inject encode_obs as callable to support obs other than images
 
     action_space: gym.Space = field(init=False)
     observation_space: gym.Space = field(init=False)
@@ -126,7 +135,7 @@ class DreamerEnvWrapper(gym.Env):
         state = self._resize_image(state)
         self.h0, self.z0 = self.model.bootstrap(self._batch(state))
         self.frame_orig, repr = state, self._unbatch(self.z0)
-        self.collect_step(state, repr, self.h0, None, None)
+        self.collect_step(state, None, None)
         return repr
 
     def step(self, action):
@@ -135,7 +144,7 @@ class DreamerEnvWrapper(gym.Env):
         self.h0, self.z0 = self.model.step(
             self._batch(state), self._batch(action), self.h0, self.z0)
         self.frame_orig, repr = state, self._unbatch(self.z0)
-        self.collect_step(state, repr, self.h0, action, reward)
+        self.collect_step(state, action, reward)
         return repr, reward, done, meta
 
     def render(self, mode="human"):

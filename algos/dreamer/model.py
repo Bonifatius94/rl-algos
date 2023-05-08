@@ -1,5 +1,4 @@
 from typing import List, Union, Callable
-import numpy as np
 
 # info: disable verbose tensorflow logging
 import os
@@ -96,6 +95,7 @@ def _create_repr_output_model(settings: DreamerSettings) -> Model:
 def _create_state_encoder_model(settings: DreamerSettings) -> Model:
     # observation t -> encoded state t
     model_in = Input(settings.obs_dims, name="enc_out")
+    norm_img = Lambda(lambda x: x / 127.5 - 1.0)
     cnn_1 = Conv2D(16, (5, 5), strides=(2, 2), padding="same", activation="relu")
     cnn_2 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
     cnn_3 = Conv2D(16, (3, 3), strides=(2, 2), padding="same", activation="relu")
@@ -107,7 +107,8 @@ def _create_state_encoder_model(settings: DreamerSettings) -> Model:
     flatten = Flatten()
     dense_out = Dense(settings.enc_dims[0], activation="linear", name="enc_dense")
 
-    prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(model_in))))))))
+    img_in = norm_img(model_in)
+    prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(img_in))))))))
     model_out = dense_out(flatten(prep_model_convs))
     return Model(inputs=model_in, outputs=model_out, name="encoder_model")
 
@@ -263,15 +264,24 @@ class DreamerModel:
         self.step_model.summary()
         self.render_model.summary()
 
-    def bootstrap(self, initial_state: np.ndarray):
+    def bootstrap(self, initial_state):
         batch_size = initial_state.shape[0]
         a_in = tf.zeros([batch_size] + self.settings.action_dims)
         h_in = tf.zeros([batch_size] + self.settings.hidden_dims)
         z_in = tf.zeros([batch_size] + self.settings.repr_dims)
-        return self.step(initial_state, a_in, h_in, z_in)
+        return self.step_model((initial_state, a_in, h_in, z_in))
 
-    def step(self, s0, a0, h, z):
-        return self.step_model((s0, a0, h, z))
+    def step(self, s1, a0, h0, z0):
+        return self.step_model((s1, a0, h0, z0))
+
+    def dream_bootstrap(self, s0_init, a0_init):
+        assert s0_init.shape[1] == a0_init.shape[1] + 1
+        steps = a0_init.shape[1]
+        h_in, z_in = self.bootstrap(s0_init[:, 0])
+        for t in range(0, steps):
+            s0, a0 = s0_init[:, t+1], a0_init[:, t]
+            h_in, z_in = self.step(s0, a0, h_in, z_in)
+        return h_in, z_in
 
     def dream_step(self, a, h, z):
         return self.dream_model((a, h, z))
@@ -280,10 +290,20 @@ class DreamerModel:
         return self.render_model((h, z))
 
     @tf.function
-    def train(self, s1, z0, h0, a0, r1, t1):
+    def train(self, s0_init, a0_init, s1, a0, r1, t1):
         ALPHA = 0.8
 
+        assert s0_init.shape[1] == a0_init.shape[1] + 1
+        bootstrap_steps = a0_init.shape[1]
+        batch_size = a0_init.shape[0]
+        a_zero = tf.zeros([batch_size] + self.settings.action_dims)
+        h0 = tf.zeros([batch_size] + self.settings.hidden_dims)
+        z0 = tf.zeros([batch_size] + self.settings.repr_dims)
+
         with tf.GradientTape() as tape:
+            h0, z0 = self.step_model((s0_init[:, 0], a_zero, h0, z0))
+            for t in range(0, bootstrap_steps):
+                h0, z0 = self.step_model((s0_init[:, t+1], a0_init[:, t], h0, z0))
             z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
             obs_loss = tf.reduce_mean(MSE(s1, s1_hat))

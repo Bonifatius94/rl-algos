@@ -44,12 +44,13 @@ def train(
 
         print("update world model")
         for i in tqdm(range(config.world_epochs)):
-            for s1, z0, h0, a0, r1, t1 in iter(shuffled_world_data):
-                env.model.train(s1, z0, h0, a0, r1, t1)
+            for s0_init, a0_init, s1, a0, r1, t1 in iter(shuffled_world_data):
+                env.model.train(s0_init, a0_init, s1, a0, r1, t1)
             log_step = ep * config.world_epochs + i
             tb_logger.flush_losses(log_step)
 
-        initial_states = shuffled_world_data.unbatch().repeat().map(lambda s1, z0, h0, a0, r1, t1: (s1))
+        initial_states = shuffled_world_data.unbatch().repeat()\
+            .map(lambda s0_init, a0_init, s1, a0, r1, t1: (s0_init, a0_init))
         initial_states_iter = iter(initial_states)
 
         agent_env = DreamVecEnv(
