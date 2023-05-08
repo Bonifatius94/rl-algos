@@ -13,7 +13,6 @@ from keras.layers import \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
 from keras.losses import MSE, kullback_leibler_divergence as KLDiv
-from keras.metrics import Mean
 
 from algos.dreamer.config import DreamerSettings
 
@@ -245,7 +244,7 @@ class DreamerModel:
         self.settings = settings
         self.model_comps = model_comps if model_comps else DreamerModelComponents(settings)
         self.loss_logger = loss_logger
-        self.optimizer = Adam()
+        self.optimizer = Adam(learning_rate=1e-4, epsilon=1e-5)
         self.env_model, self.dream_model, self.step_model, self.render_model = \
             self.model_comps.compose_models()
 
@@ -306,12 +305,12 @@ class DreamerModel:
                 h0, z0 = self.step_model((s0_init[:, t+1], a0_init[:, t], h0, z0))
             z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
-            obs_loss = tf.reduce_mean(MSE(s1, s1_hat))
+            obs_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
             repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
                 + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = obs_loss + repr_loss + reward_loss + term_loss
+            loss = tf.clip_by_value(obs_loss + repr_loss + reward_loss + term_loss, 5.0, -5.0)
 
             grads = tape.gradient(loss, self.env_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
