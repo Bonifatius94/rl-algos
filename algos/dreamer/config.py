@@ -25,10 +25,10 @@ class DreamerTrainSettings:
     num_world_trajs: int=5
     dream_steps: int=16
     batch_size: int=64
-    epochs: int=1000
+    epochs: int=100
     world_epochs: int=100
     agent_epochs: int=5
-    n_envs: int=32
+    n_envs: int=128
     steps_per_update: int=512
     save_model_interval: int=5
 
