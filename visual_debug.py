@@ -8,7 +8,7 @@ from algos.ppo.config import PPOTrainingSettings
 
 
 def visual_debugging():
-    orig_env = gym.make("ALE/Pong-v5")
+    orig_env = gym.make("ALE/Pacman-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [64])
     model = DreamerModel(settings)
     model.load("model/dreamer_final")

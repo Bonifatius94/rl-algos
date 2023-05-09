@@ -12,7 +12,7 @@ from algos.ppo.agent import PPOAgent
 
 
 def train_interactive():
-    orig_env = gym.make("ALE/Pong-v5")
+    orig_env = gym.make("ALE/Pacman-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     tb_logger = DreamerTensorboardLogger()
     model = DreamerModel(settings, loss_logger=tb_logger.log_loss)
