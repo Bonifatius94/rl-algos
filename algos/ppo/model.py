@@ -144,3 +144,9 @@ class PPOModel:
             os.makedirs(directory)
         file_path = os.path.join(directory, "ppo_model.h5")
         self.model.save_weights(file_path)
+
+    def load(self, directory: str):
+        if not os.path.exists(directory):
+            raise FileNotFoundError()
+        file_path = os.path.join(directory, "ppo_model.h5")
+        self.model.load_weights(file_path)

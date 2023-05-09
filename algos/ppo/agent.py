@@ -40,3 +40,6 @@ class PPOAgent:
 
     def save(self, directory: str):
         self.model.save(directory)
+
+    def load(self, directory: str):
+        self.model.load(directory)
