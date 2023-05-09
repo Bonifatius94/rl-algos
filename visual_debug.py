@@ -8,12 +8,12 @@ from algos.ppo.config import PPOTrainingSettings
 
 
 def visual_debugging():
-    orig_env = gym.make("ALE/Pacman-v5")
+    orig_env = gym.make("ALE/MsPacman-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [64])
     model = DreamerModel(settings)
     model.load("model/dreamer_final")
 
-    agent_config = PPOTrainingSettings(settings.repr_dims, 6)
+    agent_config = PPOTrainingSettings(settings.repr_dims, 9)
     agent = PPOAgent(agent_config)
     agent.load("model/agent_final")
 

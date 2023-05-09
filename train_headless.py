@@ -12,14 +12,14 @@ from algos.ppo.agent import PPOAgent
 
 
 def train_headless():
-    orig_env = gym.make("ALE/Pacman-v5")
+    orig_env = gym.make("ALE/MsPacman-v5")
     settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     tb_logger = DreamerTensorboardLogger()
     model = DreamerModel(settings, loss_logger=tb_logger.log_loss)
     env = DreamerEnvWrapper(orig_env, settings, model)
 
     ppo_config = PPOTrainingSettings(
-        obs_shape=settings.repr_dims, num_actions=6, n_envs=128)
+        obs_shape=settings.repr_dims, num_actions=9, n_envs=128)
     train_config = DreamerTrainSettings(
         n_envs=ppo_config.n_envs,
         steps_per_update=ppo_config.steps_per_update)
