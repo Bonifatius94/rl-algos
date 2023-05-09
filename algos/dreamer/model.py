@@ -20,6 +20,7 @@ from algos.dreamer.config import DreamerSettings
 class STGradsOneHotCategorical:
     def __init__(self, dims: Union[int, List[int]]):
         self.softmax = Softmax()
+        # self.softmax = Lambda(lambda x: tf.nn.log_softmax(x + 1e-8))
         self.sample = tfp.layers.OneHotCategorical(dims)
         self.stop_grad = Lambda(lambda x: tf.stop_gradient(x))
 
@@ -60,10 +61,12 @@ def _create_history_model(settings: DreamerSettings) -> Model:
 def _create_transition_model(settings: DreamerSettings) -> Model:
     # hidden state t+1 -> representation t+1
     model_in = Input(settings.hidden_dims, name="h0")
-    dense = Dense(settings.repr_dims_flat, name="trans_in")
+    dense1 = Dense(400, activation="relu")
+    dense2 = Dense(400, activation="relu")
+    dense3 = Dense(settings.repr_dims_flat, name="trans_in")
     reshape = Reshape(settings.repr_dims)
     st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
-    model_out = st_categorical(reshape(dense(model_in)))
+    model_out = st_categorical(reshape(dense3(dense2(dense1(model_in)))))
     return Model(inputs=model_in, outputs=model_out, name="transition_model")
 
 
@@ -73,10 +76,12 @@ def _create_representation_model(settings: DreamerSettings) -> Model:
     enc_in = Input(settings.enc_dims, name="enc_obs")
     h_in = Input(settings.hidden_dims, name="h1")
     concat = Concatenate()
-    dense = Dense(settings.repr_dims_flat, name="rep_concat")
+    dense1 = Dense(400, activation="relu")
+    dense2 = Dense(400, activation="relu")
+    dense3 = Dense(settings.repr_dims_flat, name="rep_concat")
     reshape = Reshape(settings.repr_dims)
     st_categorical = STGradsOneHotCategorical(settings.repr_dims)
-    model_out = st_categorical(reshape(dense(concat([enc_in, h_in]))))
+    model_out = st_categorical(reshape(dense3(dense2(dense1(concat([enc_in, h_in]))))))
     return Model(inputs=[enc_in, h_in], outputs=model_out, name="repr_model")
 
 
@@ -305,12 +310,15 @@ class DreamerModel:
                 h0, z0 = self.step_model((s0_init[:, t+1], a0_init[:, t], h0, z0))
             z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
 
+            # z1 = tf.reshape(z1, (-1, z1.shape[-1]))
+            # z1_hat = tf.reshape(z1_hat, (-1, z1_hat.shape[-1]))
+
             obs_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
             repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
                 + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = tf.clip_by_value(obs_loss + repr_loss + reward_loss + term_loss, 5.0, -5.0)
+            loss = obs_loss + repr_loss + reward_loss + term_loss
 
             grads = tape.gradient(loss, self.env_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
