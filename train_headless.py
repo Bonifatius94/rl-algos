@@ -13,7 +13,7 @@ from algos.ppo.agent import PPOAgent
 
 def train_headless():
     orig_env = gym.make("ALE/Pong-v5")
-    settings = DreamerSettings([1], [64, 64, 3], [32, 32], [1024], [512])
+    settings = DreamerSettings([1], [64, 64, 3], [32, 32], [512], [128])
     tb_logger = DreamerTensorboardLogger()
     model = DreamerModel(settings, loss_logger=tb_logger.log_loss)
     env = DreamerEnvWrapper(orig_env, settings, model)
