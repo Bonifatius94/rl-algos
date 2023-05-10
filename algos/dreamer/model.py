@@ -80,7 +80,7 @@ def _create_representation_model(settings: DreamerSettings) -> Model:
     dense2 = Dense(400, activation="relu")
     dense3 = Dense(settings.repr_dims_flat, name="rep_concat")
     reshape = Reshape(settings.repr_dims)
-    st_categorical = STGradsOneHotCategorical(settings.repr_dims)
+    st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
     model_out = st_categorical(reshape(dense3(dense2(dense1(concat([enc_in, h_in]))))))
     return Model(inputs=[enc_in, h_in], outputs=model_out, name="repr_model")
 
