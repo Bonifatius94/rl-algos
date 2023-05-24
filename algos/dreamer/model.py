@@ -1,4 +1,4 @@
-from typing import List, Union, Callable
+from typing import List, Union, Callable, Iterable
 
 # info: disable verbose tensorflow logging
 import os
@@ -9,7 +9,7 @@ import tensorflow_probability as tfp
 from tensorflow import keras
 from keras import Model, Input
 from keras.layers import \
-    Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
+    Layer, Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
     Reshape, Softmax, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
 from keras.losses import MSE, kullback_leibler_divergence as KLDiv
@@ -30,13 +30,74 @@ class STGradsOneHotCategorical:
         return samples + probs - self.stop_grad(probs)
 
 
-class ArgmaxLayer:
-    def __init__(self):
-        self.argmax = Lambda(lambda x: tf.cast(tf.argmax(
-            tf.cast(x, dtype=tf.float32), axis=-1), dtype=tf.float32))
+class VectorQuantizer(Layer):
+    """Adaptation of the vectorization quantization layer for learning
+    a latent space consisting of a given amount of classifications
+    with a given amount of classes each. Each classification has a distinct
+    codebook with an embedding for each subclass, resulting in a codebook
+    size of num_classifications * num_classes."""
 
-    def __call__(self, onehot_categoricals):
-        return self.argmax(onehot_categoricals)
+    def __init__(
+            self, num_classifications: int, num_classes: int,
+            name: str="vector_quantizer"):
+        super().__init__(name=name)
+        self.num_classifications = num_classifications
+        self.num_classes = num_classes
+        self.num_embeddings = num_classifications * num_classes
+
+    def build(self, input_shape: Iterable[int]):
+        input_dims_flat = tf.reduce_prod(input_shape[1:])
+        self.embedding_dims = input_dims_flat // self.num_classifications
+        self.embeddings = self._build_embeddings(self.num_embeddings, self.embedding_dims)
+
+        if input_dims_flat % self.num_classifications != 0:
+            raise ValueError((
+                f"The input dimensions {input_dims_flat} must be divisible "
+                f"by the number of classifications {self.num_classifications} "
+                f"to support swapping each of the {self.num_classifications} slices "
+                "from the input vector with a quantized vector from the codebook."))
+
+    def call(self, x: tf.Tensor):
+        input_shape = tf.shape(x)
+        flattened = tf.reshape(x, (input_shape[0], -1, self.embedding_dims))
+
+        categoricals_sparse = self._most_similar_embeddings(flattened)
+        # categoricals = tf.one_hot(categoricals_sparse, self.num_classes) # info: this is z
+
+        id_offsets = tf.range(0, self.num_classifications, dtype=tf.int64) * self.num_classes
+        categoricals_embed_sparse = categoricals_sparse + id_offsets
+        categoricals_embed = tf.one_hot(categoricals_embed_sparse, depth=self.num_embeddings)
+
+        quantized = tf.matmul(categoricals_embed, self.embeddings, transpose_b=True)
+        quantized = tf.reshape(quantized, input_shape)
+        return quantized #, categoricals
+
+    def _most_similar_embeddings(self, inputs: tf.Tensor):
+        shape = (-1, self.num_classifications, self.num_classes)
+        embeddings_per_classification = tf.reshape(self.embeddings, shape)
+        codebook_ids = []
+
+        for i in range(self.num_classifications):
+            embeddings = embeddings_per_classification[:, i, :]
+            inputs_classif = inputs[:, i, :]
+
+            inputs_sqsum = tf.reduce_sum(inputs_classif ** 2, axis=1, keepdims=True)
+            embed_sqsum = tf.reduce_sum(embeddings ** 2, axis=0)
+            similarity = tf.matmul(inputs_classif, embeddings)
+            distances = inputs_sqsum + embed_sqsum - 2 * similarity
+
+            class_ids = tf.argmin(distances, axis=1, output_type=tf.int64)
+            codebook_ids.append(tf.expand_dims(class_ids, axis=0))
+
+        codebook_ids = tf.concat(codebook_ids, axis=0)
+        codebook_ids = tf.transpose(codebook_ids, perm=[1, 0])
+        return codebook_ids
+
+    def _build_embeddings(self, num_embeddings: int, embedding_dims: int):
+        embed_shape = (embedding_dims, num_embeddings)
+        w_init = tf.random_uniform_initializer()
+        embed_w = w_init(shape=embed_shape, dtype=tf.float32)
+        return tf.Variable(embed_w, True, name="embeddings")
 
 
 def _create_history_model(settings: DreamerSettings) -> Model:
