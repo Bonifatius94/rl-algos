@@ -188,10 +188,11 @@ class DreamerModelComponents:
         h1 = history_model((a0, h0, z0))
         z1_enc = repr_model((s1_enc, h1))
         z1 = quant_model(z1_enc)
-        z1_quant = z1_enc + tf.stop_gradient(embed_model(z1) - z1_enc)
+        z1_quant = embed_model(z1)
+        out = z1_enc + tf.stop_gradient(z1_quant - z1_enc)
         z1_hat = trans_model(h1)
-        r1_hat = reward_model(z1_quant)
-        s1_hat = decoder_model(z1_quant)
+        r1_hat = reward_model(out)
+        s1_hat = decoder_model(out)
         train_model = Model(
             inputs=[s1, a0, h0, z0],
             outputs=[z1_hat, z1_enc, z1_quant, s1_hat, r1_hat, z1],
@@ -303,7 +304,7 @@ class DreamerModel:
                 + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = vqvae_loss + reconst_loss + repr_loss + reward_loss + term_loss
+            loss = vqvae_loss + reconst_loss + reward_loss + term_loss + repr_loss
 
             grads = tape.gradient(loss, self.train_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.train_model.trainable_variables))
