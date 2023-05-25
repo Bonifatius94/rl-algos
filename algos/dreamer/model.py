@@ -25,6 +25,8 @@ def _create_history_model(settings: DreamerSettings) -> Model:
     a0_in = Input(settings.action_dims, name="a0")
     z0_in = Input(settings.repr_dims, name="z0")
 
+    # TODO: think of quantizing the history model as well
+
     concat_in = Concatenate()
     flatten_repr = Flatten()
     expand_timeseries = Lambda(lambda x: tf.expand_dims(x, axis=1))
@@ -277,7 +279,7 @@ class DreamerModel:
 
     @tf.function
     def train(self, s0_init, a0_init, s1, a0, r1, t1):
-        ALPHA = 0.8
+        ALPHA = 0.2
 
         assert s0_init.shape[1] == a0_init.shape[1] + 1
         bootstrap_steps = a0_init.shape[1]
@@ -296,13 +298,13 @@ class DreamerModel:
             codebook_loss = tf.reduce_mean((z1_quant - tf.stop_gradient(z1_enc)) ** 2)
             vqvae_loss = self.settings.committment_cost * committment_loss + codebook_loss
 
-            obs_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
+            reconst_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
             repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
                 + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = vqvae_loss + obs_loss + repr_loss + reward_loss + term_loss
+            loss = vqvae_loss + reconst_loss + repr_loss + reward_loss + term_loss
 
             grads = tape.gradient(loss, self.train_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.train_model.trainable_variables))
-            self.loss_logger(obs_loss, repr_loss, reward_loss, term_loss)
+            self.loss_logger(reconst_loss, repr_loss, reward_loss, term_loss)
