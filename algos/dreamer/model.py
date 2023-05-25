@@ -1,107 +1,25 @@
-from typing import List, Union, Callable, Iterable
+from typing import Callable, Tuple
 
 # info: disable verbose tensorflow logging
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import tensorflow as tf
-import tensorflow_probability as tfp
 from tensorflow import keras
 from keras import Model, Input
 from keras.layers import \
-    Layer, Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
-    Reshape, Softmax, Lambda, Concatenate, GRU
+    Dense, Conv2D, Conv2DTranspose, Dropout, Flatten, \
+    Reshape, Lambda, Concatenate, GRU
 from keras.optimizers import Adam
 from keras.losses import MSE, kullback_leibler_divergence as KLDiv
 
 from algos.dreamer.config import DreamerSettings
-
-
-class STGradsOneHotCategorical:
-    def __init__(self, dims: Union[int, List[int]]):
-        self.softmax = Softmax()
-        # self.softmax = Lambda(lambda x: tf.nn.log_softmax(x + 1e-8))
-        self.sample = tfp.layers.OneHotCategorical(dims)
-        self.stop_grad = Lambda(lambda x: tf.stop_gradient(x))
-
-    def __call__(self, logits):
-        samples = self.sample(logits)
-        probs = self.softmax(logits)
-        return samples + probs - self.stop_grad(probs)
-
-
-class VectorQuantizer(Layer):
-    """Adaptation of the vectorization quantization layer for learning
-    a latent space consisting of a given amount of classifications
-    with a given amount of classes each. Each classification has a distinct
-    codebook with an embedding for each subclass, resulting in a codebook
-    size of num_classifications * num_classes."""
-
-    def __init__(
-            self, num_classifications: int, num_classes: int,
-            name: str="vector_quantizer"):
-        super().__init__(name=name)
-        self.num_classifications = num_classifications
-        self.num_classes = num_classes
-        self.num_embeddings = num_classifications * num_classes
-
-    def build(self, input_shape: Iterable[int]):
-        input_dims_flat = tf.reduce_prod(input_shape[1:])
-        self.embedding_dims = input_dims_flat // self.num_classifications
-        self.embeddings = self._build_embeddings(self.num_embeddings, self.embedding_dims)
-
-        if input_dims_flat % self.num_classifications != 0:
-            raise ValueError((
-                f"The input dimensions {input_dims_flat} must be divisible "
-                f"by the number of classifications {self.num_classifications} "
-                f"to support swapping each of the {self.num_classifications} slices "
-                "from the input vector with a quantized vector from the codebook."))
-
-    def call(self, x: tf.Tensor):
-        input_shape = tf.shape(x)
-        flattened = tf.reshape(x, (input_shape[0], -1, self.embedding_dims))
-
-        categoricals_sparse = self._most_similar_embeddings(flattened)
-        # categoricals = tf.one_hot(categoricals_sparse, self.num_classes) # info: this is z
-
-        id_offsets = tf.range(0, self.num_classifications, dtype=tf.int64) * self.num_classes
-        categoricals_embed_sparse = categoricals_sparse + id_offsets
-        categoricals_embed = tf.one_hot(categoricals_embed_sparse, depth=self.num_embeddings)
-
-        quantized = tf.matmul(categoricals_embed, self.embeddings, transpose_b=True)
-        quantized = tf.reshape(quantized, input_shape)
-        return quantized #, categoricals
-
-    def _most_similar_embeddings(self, inputs: tf.Tensor):
-        shape = (-1, self.num_classifications, self.num_classes)
-        embeddings_per_classification = tf.reshape(self.embeddings, shape)
-        codebook_ids = []
-
-        for i in range(self.num_classifications):
-            embeddings = embeddings_per_classification[:, i, :]
-            inputs_classif = inputs[:, i, :]
-
-            inputs_sqsum = tf.reduce_sum(inputs_classif ** 2, axis=1, keepdims=True)
-            embed_sqsum = tf.reduce_sum(embeddings ** 2, axis=0)
-            similarity = tf.matmul(inputs_classif, embeddings)
-            distances = inputs_sqsum + embed_sqsum - 2 * similarity
-
-            class_ids = tf.argmin(distances, axis=1, output_type=tf.int64)
-            codebook_ids.append(tf.expand_dims(class_ids, axis=0))
-
-        codebook_ids = tf.concat(codebook_ids, axis=0)
-        codebook_ids = tf.transpose(codebook_ids, perm=[1, 0])
-        return codebook_ids
-
-    def _build_embeddings(self, num_embeddings: int, embedding_dims: int):
-        embed_shape = (embedding_dims, num_embeddings)
-        w_init = tf.random_uniform_initializer()
-        embed_w = w_init(shape=embed_shape, dtype=tf.float32)
-        return tf.Variable(embed_w, True, name="embeddings")
+from algos.dreamer.layers import \
+    STOneHotCategorical, VQCategorical, VQCodebook
 
 
 def _create_history_model(settings: DreamerSettings) -> Model:
-    # (hidden state t, action t, representation t) -> hidden state t+1
+    # h0, a0, z0 -> h1
 
     h0_in = Input(settings.hidden_dims, name="h0")
     a0_in = Input(settings.action_dims, name="a0")
@@ -120,41 +38,39 @@ def _create_history_model(settings: DreamerSettings) -> Model:
 
 
 def _create_transition_model(settings: DreamerSettings) -> Model:
-    # hidden state t+1 -> representation t+1
+    # h1 -> z1_hat
     model_in = Input(settings.hidden_dims, name="h0")
     dense1 = Dense(400, activation="relu")
     dense2 = Dense(400, activation="relu")
     dense3 = Dense(settings.repr_dims_flat, name="trans_in")
     reshape = Reshape(settings.repr_dims)
-    st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
+    st_categorical = STOneHotCategorical(settings.repr_dims[1])
     model_out = st_categorical(reshape(dense3(dense2(dense1(model_in)))))
     return Model(inputs=model_in, outputs=model_out, name="transition_model")
 
 
 def _create_representation_model(settings: DreamerSettings) -> Model:
-    # fuses encoded state and hidden state
-    # stochastic model that outputs a distribution
+    # s_enc, h1 -> z_enc
     enc_in = Input(settings.enc_dims, name="enc_obs")
     h_in = Input(settings.hidden_dims, name="h1")
     concat = Concatenate()
-    dense1 = Dense(400, activation="relu")
-    dense2 = Dense(400, activation="relu")
-    dense3 = Dense(settings.repr_dims_flat, name="rep_concat")
-    reshape = Reshape(settings.repr_dims)
-    st_categorical = STGradsOneHotCategorical(settings.repr_dims[1])
-    model_out = st_categorical(reshape(dense3(dense2(dense1(concat([enc_in, h_in]))))))
+    dense1 = Dense(settings.enc_dims[0], activation="relu")
+    model_out = dense1(concat([enc_in, h_in]))
     return Model(inputs=[enc_in, h_in], outputs=model_out, name="repr_model")
 
 
-def _create_repr_output_model(settings: DreamerSettings) -> Model:
-    # fuses representation and hidden state
-    # input of decoder and reward prediction
-    z_in = Input(settings.repr_dims, name="z1")
-    h_in = Input(settings.hidden_dims, name="h1")
-    concat = Concatenate()
-    flatten = Flatten()
-    model_out = concat([flatten(z_in), h_in])
-    return Model(inputs=[h_in, z_in], outputs=model_out, name="repr_output_model")
+def _create_quantization_model(settings: DreamerSettings) -> Tuple[Model, Model]:
+    # z1_enc -> z1
+    z_enc_in = Input(settings.enc_dims, name="z_enc_in")
+    z_in = Input(settings.repr_dims, name="z_in")
+
+    codebook = VQCodebook(settings.repr_dims[0], settings.repr_dims[1])
+    cat_quant = VQCategorical(codebook)
+    # flatten = Flatten()
+
+    quant_model = Model(inputs=[z_enc_in], outputs=[cat_quant(z_enc_in)], name="quant_model")
+    embed_model = Model(inputs=[z_in], outputs=[codebook(z_in)], name="embed_model")
+    return quant_model, embed_model
 
 
 def _create_state_encoder_model(settings: DreamerSettings) -> Model:
@@ -170,7 +86,7 @@ def _create_state_encoder_model(settings: DreamerSettings) -> Model:
     drop_3 = Dropout(rate=settings.dropout_rate)
     drop_4 = Dropout(rate=settings.dropout_rate)
     flatten = Flatten()
-    dense_out = Dense(settings.enc_dims[0], activation="linear", name="enc_dense")
+    dense_out = Dense(settings.enc_dims[0])
 
     img_in = norm_img(model_in)
     prep_model_convs = drop_4(cnn_4(drop_3(cnn_3(drop_2(cnn_2(drop_1(cnn_1(img_in))))))))
@@ -183,7 +99,7 @@ def _create_state_decoder_model(settings: DreamerSettings) -> Model:
     image_channels = settings.obs_dims[-1]
     upscale_source_dims = (settings.obs_dims[0] // 8 * settings.obs_dims[1] // 8) * 8
 
-    model_in = Input(settings.repr_out_dims_flat, name="repr_out")
+    model_in = Input(settings.enc_dims, name="repr_out")
     dense_in = Dense(upscale_source_dims, activation="linear", name="dec_in")
     reshape_in = Reshape((settings.obs_dims[0] // 8, settings.obs_dims[1] // 8, -1))
     cnn_1 = Conv2DTranspose(64, (3, 3), strides=(2, 2), padding="same", activation="relu")
@@ -203,7 +119,7 @@ def _create_state_decoder_model(settings: DreamerSettings) -> Model:
 
 def _create_reward_model(settings: DreamerSettings) -> Model:
     # concat(representation, hidden state) -> (reward, done)
-    model_in = Input(settings.repr_out_dims_flat, name="repr_out")
+    model_in = Input(settings.enc_dims, name="repr_out")
     dense_1 = Dense(64, "relu", name="rew1")
     dense_2 = Dense(64, "relu", name="rew2")
     reward = Dense(1, activation="linear", name="rew3")
@@ -223,7 +139,7 @@ class DreamerModelComponents:
         self.encoder_model = _create_state_encoder_model(settings)
         self.repr_model = _create_representation_model(settings)
         self.trans_model = _create_transition_model(settings)
-        self.repr_out_model = _create_repr_output_model(settings)
+        self.quant_model, self.embed_model = _create_quantization_model(settings)
         self.decoder_model = _create_state_decoder_model(settings)
         self.reward_model = _create_reward_model(settings)
 
@@ -233,7 +149,8 @@ class DreamerModelComponents:
         self.history_model.save_weights(os.path.join(directory, f"history_model.h5"))
         self.trans_model.save_weights(os.path.join(directory, f"trans_model.h5"))
         self.repr_model.save_weights(os.path.join(directory, f"repr_model.h5"))
-        self.repr_out_model.save_weights(os.path.join(directory, f"repr_out_model.h5"))
+        self.quant_model.save_weights(os.path.join(directory, f"quant_model.h5"))
+        self.embed_model.save_weights(os.path.join(directory, f"embed_model.h5"))
         self.encoder_model.save_weights(os.path.join(directory, f"encoder_model.h5"))
         self.decoder_model.save_weights(os.path.join(directory, f"decoder_model.h5"))
         self.reward_model.save_weights(os.path.join(directory, f"reward_model.h5"))
@@ -244,7 +161,8 @@ class DreamerModelComponents:
         self.history_model.load_weights(os.path.join(directory, f"history_model.h5"))
         self.trans_model.load_weights(os.path.join(directory, f"trans_model.h5"))
         self.repr_model.load_weights(os.path.join(directory, f"repr_model.h5"))
-        self.repr_out_model.load_weights(os.path.join(directory, f"repr_out_model.h5"))
+        self.quant_model.load_weights(os.path.join(directory, f"quant_model.h5"))
+        self.embed_model.load_weights(os.path.join(directory, f"embed_model.h5"))
         self.encoder_model.load_weights(os.path.join(directory, f"encoder_model.h5"))
         self.decoder_model.load_weights(os.path.join(directory, f"decoder_model.h5"))
         self.reward_model.load_weights(os.path.join(directory, f"reward_model.h5"))
@@ -258,18 +176,20 @@ class DreamerModelComponents:
         history_model = self.history_model
         trans_model = self.trans_model
         repr_model = self.repr_model
-        repr_out_model = self.repr_out_model
+        quant_model = self.quant_model
+        embed_model = self.embed_model
         encoder_model = self.encoder_model
         decoder_model = self.decoder_model
         reward_model = self.reward_model
 
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, h0, z0))
-        z1 = repr_model((s1_enc, h1))
+        z1_enc = repr_model((s1_enc, h1))
+        z1 = quant_model(z1_enc)
+        z1_quant = z1_enc + tf.stop_gradient(embed_model(z1) - z1_enc)
         z1_hat = trans_model(h1)
-        out = repr_out_model((h1, z1))
-        r1_hat = reward_model(out)
-        s1_hat = decoder_model(out)
+        r1_hat = reward_model(z1_quant)
+        s1_hat = decoder_model(z1_quant)
         env_model = Model(
             inputs=[s1, a0, h0, z0],
             outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
@@ -277,8 +197,8 @@ class DreamerModelComponents:
 
         h1 = history_model((a0, h0, z0))
         z1_hat = trans_model(h1)
-        out = repr_out_model((h1, z1_hat))
-        r1_hat = reward_model(out)
+        z1_quant = embed_model(z1_hat)
+        r1_hat = reward_model(z1_quant)
         dream_model = Model(
             inputs=[a0, h0, z0],
             outputs=[r1_hat, h1, z1_hat],
@@ -286,17 +206,18 @@ class DreamerModelComponents:
 
         s1_enc = encoder_model(s1)
         h1 = history_model((a0, h0, z0))
-        z1 = repr_model((s1_enc, h1))
+        z1_enc = repr_model((s1_enc, h1))
+        z1 = quant_model(z1_enc)
         step_model = Model(
             inputs=[s1, a0, h0, z0],
             outputs=[h1, z1],
             name="step_model")
 
-        out = repr_out_model((h0, z0))
-        s1_hat = decoder_model(out)
+        z0_quant = embed_model(z0)
+        s0_hat = decoder_model(z0_quant)
         render_model = Model(
-            inputs=[h0, z0],
-            outputs=[s1_hat],
+            inputs=[h0, z0], # TODO: does not require h0 anymore
+            outputs=[s0_hat],
             name="render_model")
 
         return env_model, dream_model, step_model, render_model
