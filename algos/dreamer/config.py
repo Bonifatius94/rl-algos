@@ -10,6 +10,7 @@ class DreamerSettings:
     hidden_dims: List[int]
     enc_dims: List[int]
     dropout_rate: float = 0.2
+    committment_cost: float = 0.25
 
     @property
     def repr_dims_flat(self) -> int:

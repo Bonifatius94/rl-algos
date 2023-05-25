@@ -190,10 +190,10 @@ class DreamerModelComponents:
         z1_hat = trans_model(h1)
         r1_hat = reward_model(z1_quant)
         s1_hat = decoder_model(z1_quant)
-        env_model = Model(
+        train_model = Model(
             inputs=[s1, a0, h0, z0],
-            outputs=[z1_hat, s1_hat, r1_hat, h1, z1],
-            name="env_model")
+            outputs=[z1_hat, z1_enc, z1_quant, s1_hat, r1_hat, z1],
+            name="train_model")
 
         h1 = history_model((a0, h0, z0))
         z1_hat = trans_model(h1)
@@ -220,7 +220,7 @@ class DreamerModelComponents:
             outputs=[s0_hat],
             name="render_model")
 
-        return env_model, dream_model, step_model, render_model
+        return train_model, dream_model, step_model, render_model
 
 
 class DreamerModel:
@@ -232,7 +232,7 @@ class DreamerModel:
         self.model_comps = model_comps if model_comps else DreamerModelComponents(settings)
         self.loss_logger = loss_logger
         self.optimizer = Adam(learning_rate=1e-4, epsilon=1e-5)
-        self.env_model, self.dream_model, self.step_model, self.render_model = \
+        self.train_model, self.dream_model, self.step_model, self.render_model = \
             self.model_comps.compose_models()
 
     def seed(self, seed: int):
@@ -245,7 +245,7 @@ class DreamerModel:
         self.model_comps.load_weights(directory)
 
     def summary(self):
-        self.env_model.summary()
+        self.train_model.summary()
         self.dream_model.summary()
         self.step_model.summary()
         self.render_model.summary()
@@ -290,18 +290,19 @@ class DreamerModel:
             h0, z0 = self.step_model((s0_init[:, 0], a_zero, h0, z0))
             for t in range(0, bootstrap_steps):
                 h0, z0 = self.step_model((s0_init[:, t+1], a0_init[:, t], h0, z0))
-            z1_hat, s1_hat, (r1_hat, term_hat), _, z1 = self.env_model((s1, a0, h0, z0))
+            z1_hat, z1_enc, z1_quant, s1_hat, (r1_hat, term_hat), z1 = self.train_model((s1, a0, h0, z0))
 
-            # z1 = tf.reshape(z1, (-1, z1.shape[-1]))
-            # z1_hat = tf.reshape(z1_hat, (-1, z1_hat.shape[-1]))
+            committment_loss = tf.reduce_mean((tf.stop_gradient(z1_quant) - z1_enc) ** 2)
+            codebook_loss = tf.reduce_mean((z1_quant - tf.stop_gradient(z1_enc)) ** 2)
+            vqvae_loss = self.settings.committment_cost * committment_loss + codebook_loss
 
             obs_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
             repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1), z1_hat)) \
                 + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1, tf.stop_gradient(z1_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = obs_loss + repr_loss + reward_loss + term_loss
+            loss = vqvae_loss + obs_loss + repr_loss + reward_loss + term_loss
 
-            grads = tape.gradient(loss, self.env_model.trainable_variables)
-            self.optimizer.apply_gradients(zip(grads, self.env_model.trainable_variables))
+            grads = tape.gradient(loss, self.train_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.train_model.trainable_variables))
             self.loss_logger(obs_loss, repr_loss, reward_loss, term_loss)

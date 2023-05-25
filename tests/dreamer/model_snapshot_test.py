@@ -22,18 +22,19 @@ def test_can_snapshot_and_restore_model():
 
     def assert_prediction_equal(model_1, model_2, inputs):
         model.seed(42)
-        z1_hat_1, s1_hat_1, (r1_hat_1, term_hat_1), h1_1, z1_1 = model_1(inputs)
+        z1_hat_1, z1_enc_1, z1_quant_1, s1_hat_1, (r1_hat_1, term_hat_1), z1_1 = model_1(inputs)
         model2.seed(42)
-        z1_hat_2, s1_hat_2, (r1_hat_2, term_hat_2), h1_2, z1_2 = model_2(inputs)
+        z1_hat_2, z1_enc_2, z1_quant_2, s1_hat_2, (r1_hat_2, term_hat_2), z1_2 = model_2(inputs)
 
         def arrays_equal(arr1, arr2):
             return np.all(arr1 == arr2)
 
         assert arrays_equal(z1_hat_1, z1_hat_2)
+        assert arrays_equal(z1_enc_1, z1_enc_2)
+        assert arrays_equal(z1_quant_1, z1_quant_2)
         assert arrays_equal(s1_hat_1, s1_hat_2)
         assert arrays_equal(r1_hat_1, r1_hat_2)
         assert arrays_equal(term_hat_1, term_hat_2)
-        assert arrays_equal(h1_1, h1_2)
         assert arrays_equal(z1_1, z1_2)
 
     model.save(weights_dir)
@@ -41,6 +42,6 @@ def test_can_snapshot_and_restore_model():
     model2.load(weights_dir)
 
     assert os.path.exists(weights_dir)
-    assert_prediction_equal(model.env_model, model2.env_model, inputs)
+    assert_prediction_equal(model.train_model, model2.train_model, inputs)
 
     os.system(f"rm -rf {weights_dir}")
