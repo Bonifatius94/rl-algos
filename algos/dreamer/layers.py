@@ -119,4 +119,4 @@ class VQCombined(Layer):
     def call(self, inputs):
         categoricals = self.vq_categorical(inputs)
         quantized = self.vq_codebook(categoricals)
-        return inputs + tf.stop_gradient(quantized - inputs), categoricals
+        return inputs, categoricals

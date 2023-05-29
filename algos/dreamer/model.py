@@ -58,7 +58,7 @@ def create_vqvae(settings: DreamerSettings):
     obs_in = Input(settings.obs_dims, name="obs")
     z_enc = encoder(obs_in)
     z_quant, z_cat = vq(z_enc)
-    obs_reconst = decoder(z_quant)
+    obs_reconst = decoder(z_enc + tf.stop_gradient(z_quant - z_enc))
 
     z_cat_in = Input(settings.repr_dims)
     z_hat_quant = vq.vq_codebook(z_cat_in)
@@ -79,9 +79,10 @@ def create_vqrnn(settings: DreamerSettings):
 
     _, h1_enc = rnn(x_in, initial_state=h0_quant_in)
     h1_quant, h1_cat = vq(h1_enc)
+    h1_st_out = h1_enc + tf.stop_gradient(h1_quant - h1_enc)
 
     vqrnn = Model(inputs=[x_in, h0_quant_in], outputs=[h1_quant, h1_cat])
-    vqrnn_train = Model(inputs=[x_in, h0_quant_in], outputs=[h1_enc, h1_quant, h1_cat])
+    vqrnn_train = Model(inputs=[x_in, h0_quant_in], outputs=[h1_enc, h1_quant, h1_cat, h1_st_out])
     return vqrnn, vqrnn_train, vq.vq_codebook
 
 
@@ -183,10 +184,10 @@ class DreamerModelComponents:
 
         s1_hat, z1_enc, z1_quant = self.vqvae(s1)
         z1_quant, z1_cat = self.obs_encoder(s1)
-        x0 = self.fuse_az_rnn_input((a0, z0_quant))
-        h1_enc, h1_quant, _ = self.vqrnn_train((x0, h0_quant))
-        z1_cat_hat, _ = self.dream_trans(h1_quant)
-        r1_hat = self.reward_pred((h1_quant, z1_quant))
+        x0 = self.fuse_az_rnn_input((a0, tf.stop_gradient(z0_quant)))
+        h1_enc, h1_quant, _, h1_st = self.vqrnn_train((x0, h0_quant))
+        z1_cat_hat, _ = self.dream_trans(h1_st)
+        r1_hat = self.reward_pred((h1_st, z1_quant))
         train_model = Model(
             inputs=[s1, a0, h0_quant, z0_quant],
             outputs=[z1_enc, z1_quant, h1_enc, h1_quant, s1_hat, r1_hat, z1_cat, z1_cat_hat],
@@ -210,7 +211,7 @@ class DreamerModelComponents:
             name="step_model")
 
         z1_quant, _ = self.obs_encoder(s1)
-        x0 = self.fuse_az_rnn_input((a0, z0_quant))
+        x0 = self.fuse_az_rnn_input((a0, tf.stop_gradient(z0_quant)))
         h1_quant, _ = self.vqrnn((x0, h0_quant))
         train_step_model = Model(
             inputs=[s1, a0, h0_quant, z0_quant],
@@ -269,8 +270,8 @@ class DreamerModel:
     def dream_step(self, a, h, z):
         return self.dream_model((a, h, z))
 
-    def render(self, h, z):
-        return self.render_model((h, z))
+    def render(self, z):
+        return self.render_model(z)
 
     @tf.function
     def train(self, s0_init, a0_init, s1, a0, r1, t1):
@@ -299,11 +300,11 @@ class DreamerModel:
             vqrnn_loss = self.settings.committment_cost * committment_loss + codebook_loss
 
             reconst_loss = tf.reduce_mean(MSE(tf.cast(s1, dtype=tf.float32) / 255.0, s1_hat / 255.0))
-            repr_loss = ALPHA * tf.reduce_mean(KLDiv(tf.stop_gradient(z1_cat), z1_cat_hat)) \
-                + (1 - ALPHA) * tf.reduce_mean(KLDiv(z1_cat, tf.stop_gradient(z1_cat_hat)))
+            repr_loss = tf.reduce_mean(KLDiv(tf.stop_gradient(z1_cat), z1_cat_hat))
+                #+ (1 - ALPHA) * tf.reduce_mean(KLDiv(z1_cat, tf.stop_gradient(z1_cat_hat)))
             reward_loss = tf.reduce_mean(MSE(r1, r1_hat))
             term_loss = tf.reduce_mean(MSE(t1, term_hat))
-            loss = vqvae_loss + vqrnn_loss + reconst_loss + repr_loss + reward_loss + term_loss
+            loss = vqvae_loss + vqrnn_loss + reconst_loss + reward_loss + term_loss + repr_loss
 
             grads = tape.gradient(loss, self.train_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.train_model.trainable_variables))
