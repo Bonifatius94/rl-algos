@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow import keras
 from keras.layers import \
-    Layer, Softmax, Lambda, Reshape
+    Layer, Softmax, Lambda, Reshape, Concatenate
 
 
 class STOneHotCategorical(Layer):
@@ -110,8 +110,8 @@ class VQCombined(Layer):
             self, num_classifications: int, num_classes: int,
             name: str="vq_combined"):
         super().__init__(name=name)
-        self.vq_codebook = VQCodebook(num_classifications, num_classes)
-        self.vq_categorical = VQCategorical(self.vq_codebook)
+        self.vq_codebook = VQCodebook(num_classifications, num_classes, name=f"{name}_codebook")
+        self.vq_categorical = VQCategorical(self.vq_codebook, name=f"{name}_categorical")
 
     def build(self, input_shape):
         self.vq_categorical.build(input_shape)
@@ -119,4 +119,4 @@ class VQCombined(Layer):
     def call(self, inputs):
         categoricals = self.vq_categorical(inputs)
         quantized = self.vq_codebook(categoricals)
-        return quantized
+        return inputs + tf.stop_gradient(quantized - inputs), categoricals

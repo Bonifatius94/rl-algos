@@ -148,7 +148,8 @@ class DreamerEnvWrapper(gym.Env):
         return repr, reward, done, meta
 
     def render(self, mode="human"):
-        frame_hall = self.model.render(self.h0, self.z0)
+        # TODO: use decoder(trans(h1)) to see actual dream; decoder(z1) is VAE's latent state
+        frame_hall = self.model.render(self.z0)
         self.render_output(self.frame_orig, self._unbatch(frame_hall))
 
     def seed(self, seed: int):

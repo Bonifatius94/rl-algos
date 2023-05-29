@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from algos.dreamer.config import DreamerTrainSettings
 from algos.dreamer.env import DreamerEnvWrapper, DreamVecEnv
-from algos.dreamer.dataset import sample_trajectory, MixedDatasetGenerator
+from algos.dreamer.dataset import sample_trajectory, MixedDatasetGenerator, concat_datasets
 from algos.dreamer.logging import DreamerTensorboardLogger
 
 
@@ -28,15 +28,18 @@ def train(
         tb_logger: DreamerTensorboardLogger,
         on_end_of_episode: Callable[[int], None] = lambda ep: None):
 
-    world_actor = agent.act
-    dataset_gen = MixedDatasetGenerator(
-        lambda: sample_trajectory(env, world_actor), config.batch_size, 156)
+    # world_actor = agent.act
+    # dataset_gen = MixedDatasetGenerator(
+    #     lambda: sample_trajectory(env, world_actor), config.batch_size, 156)
+    print("sample trajectories (static)")
+    trajs = [sample_trajectory(env, agent.act)[1] for i in tqdm(range(5))]
+    shuffled_world_data = concat_datasets(trajs).shuffle(100).batch(config.batch_size)
 
     for ep in range(config.epochs):
         print(f"start of episode {ep+1}")
 
-        print("sample trajectories")
-        shuffled_world_data = dataset_gen.sample()
+        # print("sample trajectories")
+        # shuffled_world_data = dataset_gen.sample()
 
         print("update world model")
         for i in tqdm(range(config.world_epochs)):

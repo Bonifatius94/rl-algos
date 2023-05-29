@@ -6,9 +6,9 @@ from dataclasses import dataclass
 class DreamerSettings:
     action_dims: List[int]
     obs_dims: List[int]
+    obs_enc_dims: List[int]
     repr_dims: List[int]
     hidden_dims: List[int]
-    enc_dims: List[int]
     dropout_rate: float = 0.2
     committment_cost: float = 0.25
 
