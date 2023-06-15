@@ -6,3 +6,4 @@ videos
 __pycache__
 venv
 .idea
+jupyter-notebooks
