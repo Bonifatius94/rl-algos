@@ -5,6 +5,10 @@
 This repository outlines several reinforcement learning algorithms
 and uses them to solve common OpenAI Gym environment tasks.
 
+The algorithm outlined is Proximal Policy Optimization (PPO). The implementation
+of Dreamer is currently not working. Feel free to contribute in case you want
+to help implementing more algorithms.
+
 ## Quickstart
 
 ```sh
